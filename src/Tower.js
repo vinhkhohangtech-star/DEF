@@ -540,10 +540,23 @@
       this.drawTop(ctx, rx, ry);
 
       if (this.flash > 0) {
-        ctx.globalAlpha = this.flash * 0.35;
-        ctx.fillStyle = '#ff3b2b';
-        D.roundRect(ctx, -rx * 1.05, -this.hDisp - 10, rx * 2.1, this.hDisp + ry + 10, 16);
-        ctx.fill();
+        if (png) {
+          // v10: hit flash tints the tower's own silhouette (no more red box)
+          const { img, iw, m, s } = png, sy = s * (png.deck > 0 ? this.hDisp / png.deck : 1);
+          const w = Math.ceil(iw * s), h = Math.ceil(m.crop * sy);
+          const c = this._tint || (this._tint = document.createElement('canvas'));
+          if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+          const x = c.getContext('2d');
+          x.globalCompositeOperation = 'copy'; x.drawImage(img, 0, 0, iw, m.crop, 0, 0, w, h);
+          x.globalCompositeOperation = 'source-atop'; x.fillStyle = '#ff3b2b'; x.fillRect(0, 0, w, h);
+          ctx.globalAlpha = this.flash * 0.45;
+          ctx.drawImage(c, -iw / 2 * s, -m.gy * sy, w, h);
+        } else {
+          ctx.globalAlpha = this.flash * 0.35;
+          ctx.fillStyle = '#ff3b2b';
+          D.roundRect(ctx, -rx * 1.05, -this.hDisp - 10, rx * 2.1, this.hDisp + ry + 10, 16);
+          ctx.fill();
+        }
         ctx.globalAlpha = 1;
       }
       ctx.restore();

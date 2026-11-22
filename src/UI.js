@@ -123,7 +123,7 @@
       this.shopOpen = false;
       this.$ = {};
       [
-        'waveNum', 'goldNum', 'scoreNum', 'killNum', 'goldPill', 'hpBar', 'hpFill', 'hpLag', 'hpText',
+        'waveNum', 'goldNum', 'scoreNum', 'killNum', 'goldPill', 'hpBar', 'hpFill', 'hpLag', 'hpText', 'hpArmor',
         'redFill', 'redText', 'greenFill', 'greenText', 'redBar', 'greenBar',
         'bossBar', 'bossFill', 'bossName', 'combo', 'comboNum', 'comboMult', 'comboTimer',
         'btnSpeed', 'btnMute', 'btnPause', 'intermission', 'nextWaveNum', 'nextWaveTime', 'btnNextWave',
@@ -219,7 +219,18 @@
 
     setMuted(m) { this.$.btnMute.textContent = m ? '🔇' : '🔊'; }
 
+    /** 📱 v11: portrait = shop permanently docked in the bottom panel (no [B] drawer). */
+    setPortrait(p) {
+      this.portrait = p;
+      this.shopOpen = p;
+      this.$.shop.classList.toggle('closed', !p);
+      this.$.shop.classList.toggle('docked', p);
+      this.cache = {};
+      this.renderShop();
+    }
+
     toggleShop(force) {
+      if (this.portrait) return;                     // docked in portrait — nothing to toggle
       this.shopOpen = force != null ? force : !this.shopOpen;
       this.$.shop.classList.toggle('closed', !this.shopOpen);
       if (this.shopOpen) this.renderShop();
@@ -267,6 +278,7 @@
     }
 
     renderShop() {
+      if (this.portrait) { this.renderShopPortrait(); return; }
       const g = this.game;
       const t = g.tower;
       const tierNames = ['Boong-ke', 'Tháp 2 tầng', 'Tháp radar 3 tầng', 'Siêu Pháo Đài'];
@@ -301,9 +313,41 @@
       this.refreshShopButtons();
     }
 
+    /** 📱 Portrait console: 2 columns of big stat tiles (≥48 px buttons) + owned equipment below. */
+    renderShopPortrait() {
+      const g = this.game, t = g.tower;
+      const tierNames = ['Boong-ke', 'Tháp 2 tầng', 'Tháp radar 3 tầng', 'Siêu Pháo Đài'];
+      const br = t.branchId ? BRANCHES.find((b) => b.id === t.branchId) : null;
+      const tile = (label, lv, max, val, btn) => `<div class="p-stat">
+          <div class="p-top"><span class="p-lbl">${label}</span></div>
+          <div class="p-mid"><div class="p-row"><b class="p-val">${val}</b><span class="p-lvl">Lv ${lv}/${max}</span></div>${this.pips(lv, max)}</div>${btn}</div>`;
+      let html = '<div class="p-grid">';
+      for (const r of STAT_ROWS) {
+        html += tile(r.label, t.lv[r.id], TD.STAT_MAX, t.statValue(r.id), this.costBtn(`data-action="stat" data-stat="${r.id}"`, t.upgradeCost(r.id)));
+      }
+      html += '</div>';
+      const owned = AUX_ROWS.filter((r) => (t.cards[r.id] || 0) > 0);
+      html += `<div class="p-sec">🧰 Trang bị phụ trợ ${owned.length ? '' : '<small>— rút thẻ 🟢 để mở khoá</small>'}</div>`;
+      if (owned.length) {
+        html += '<div class="p-grid">';
+        for (const r of owned) {
+          const val = r.id === 'wall' ? t.wall.segMax : '+' + (t.aux[r.id] * 20) + '%';
+          html += tile(r.label, t.aux[r.id], TD.AUX_MAX, val, this.costBtn(`data-action="aux" data-stat="${r.id}"`, t.auxCost(r.id)));
+        }
+        html += '</div>';
+      }
+      html += `<div class="p-sec p-tier"><span class="w-icon tier">T${t.tier}</span> ${tierNames[t.tier]} · ${br ? `${br.icon} ${br.name} Lv${t.branch.lv}` : 'đầy 🔴 để lên tầng'}</div>`;
+      this.$.shopContent.innerHTML = html;
+      this.refreshShopButtons();
+    }
+
     refreshShopButtons() {
       const gold = this.game.gold;
-      this.$.shopContent.querySelectorAll('button[data-cost]').forEach((b) => { b.disabled = gold < +b.dataset.cost; });
+      this.$.shopContent.querySelectorAll('button[data-cost]').forEach((b) => {
+        const ok = gold >= +b.dataset.cost;
+        b.disabled = !ok;
+        b.classList.toggle('afford', ok);
+      });
     }
 
     canAffordAnything() {
@@ -342,6 +386,7 @@
       this.$.hpFill.style.width = (pct * 100).toFixed(1) + '%';
       this.$.hpLag.style.width = (pct * 100).toFixed(1) + '%';
       this.set('hpText', `${Math.ceil(t.hp)} / ${t.maxHp}`);
+      if (this.$.hpArmor) this.set('hpArmor', `🛡️${Math.round(t.armorPct)}%`);
       this.$.hpBar.classList.toggle('low', pct < 0.3);
 
       // energy bars
@@ -430,7 +475,8 @@
         ctx.globalAlpha = Math.max(0, Math.min(1, (f.life - f.age) / (f.life * 0.35)));
         ctx.save();
         ctx.translate(s.x, s.y);
-        ctx.scale(sc, sc);
+        const ts = g.textScale || 1;
+        ctx.scale(sc * ts, sc * ts);
         if (f.style === 'crit') ctx.rotate(-0.06);
         const font = f.style === 'crit' || f.style === 'big' || f.style === 'info' ? "'Black Ops One', 'Impact', sans-serif" : "'Rajdhani', 'Arial Narrow', sans-serif";
         ctx.font = `700 ${f.size}px ${font}`;
@@ -580,8 +626,9 @@
     reset() {
       this.floaters.length = 0;
       this.cache = {};
-      this.shopOpen = false;
-      this.$.shop.classList.add('closed');
+      this.shopOpen = !!this.portrait;
+      this.$.shop.classList.toggle('closed', !this.portrait);
+      if (this.portrait) this.renderShop();
     }
 
     /* =========================================================

@@ -64,6 +64,42 @@
     return (_crater = c);
   }
 
+  /** Thermal fireball tiers: white-hot → bright yellow → orange → soot red (cached radial sprites). */
+  const TIERS = [
+    [[0, '255,255,255,1'], [0.3, '255,252,236,0.95'], [0.65, '255,240,200,0.45'], [1, '255,230,180,0']],
+    [[0, '255,250,210,1'], [0.3, '255,226,110,0.95'], [0.68, '255,180,50,0.5'], [1, '255,150,30,0']],
+    [[0, '255,196,96,0.95'], [0.35, '255,128,36,0.85'], [0.7, '214,70,16,0.45'], [1, '160,40,10,0']],
+    [[0, '190,64,22,0.8'], [0.4, '130,34,12,0.6'], [0.75, '70,20,10,0.3'], [1, '40,14,8,0']],
+  ];
+  const TIER_GLOW = ['#fff6e0', '#ffd060', '#ff7a20', '#a8300c'];
+  const _tier = [];
+  function tierSprite(i) {
+    if (_tier[i]) return _tier[i];
+    const c = document.createElement('canvas'); c.width = c.height = 96;
+    const x = c.getContext('2d'), g = x.createRadialGradient(48, 48, 0, 48, 48, 48);
+    for (const [o, col] of TIERS[i]) g.addColorStop(o, `rgba(${col})`);
+    x.fillStyle = g; x.fillRect(0, 0, 96, 96);
+    return (_tier[i] = c);
+  }
+  /** Nuke mushroom proportions (v10: peak height ≈ 60 % of the v6 cloud, never covers the top HUD). */
+  const NUKE_H = 0.6, NUKE_W = 0.72;
+  function mushroomCapZ(R, age, groundY) { return Math.max(40, Math.min(Math.min(1, age / 1.6) * R * 0.85 * NUKE_H + 30, groundY - 190)); }
+
+  /** Volumetric smoke puff: shadowed body + sun-lit crown + optional fire under-glow. */
+  function drawPuff(ctx, x, y, r, body, lit, a, hot = 0, hard = 0.45, litA = 0.5) {
+    if (r < 1 || a <= 0.01) return;
+    ctx.globalAlpha = a;
+    ctx.drawImage(D.blob(body, hard), x - r, y - r, r * 2, r * 2);
+    ctx.globalAlpha = a * litA;
+    ctx.drawImage(D.blob(lit, 0.25), x - r * 0.9, y - r * 1.02, r * 1.5, r * 1.25);
+    if (hot > 0.02) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = a * hot * 0.75;
+      ctx.drawImage(D.blob('#ff7a2a'), x - r * 0.85, y - r * 0.25, r * 1.7, r * 1.3);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+  }
+
   /** Graphics toggles (perf profiling / low-end fallback). */
   TD.FX = TD.FX || { refraction: true, shimmer: true };
 
@@ -131,7 +167,7 @@
       const sp = rand(90, 160);
       this.spawn({
         type: 'casing', x, y, z, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: rand(140, 230),
-        g: -900, drag: 0.6, rot: rand(0, 6), vr: rand(-25, 25), life: rand(0.9, 1.4), size: 3,
+        g: -900, drag: 0.6, rot: rand(0, 6), vr: rand(-22, 22), tumble: rand(0, 6), vt: rand(18, 34), life: rand(1.6, 2.2), size: 3, bounces: 0,
       });
     }
 
@@ -212,25 +248,61 @@
     }
 
     /** Incandescent molten shrapnel: physics arc, smoky spark trail, embeds & glows on the ground. */
-    shrapnel(x, y, z = 10, { count = 8, speed = 320 } = {}) {
+    shrapnel(x, y, z = 10, { count = 8, speed = 320, delay = 0 } = {}) {
       for (let i = 0; i < count; i++) {
         const a = Math.random() * Math.PI * 2;
         const sp = speed * rand(0.45, 1.15);
         this.spawn({
           type: 'shrapnel', x, y, z: z + rand(0, 8),
           vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: rand(140, 420),
-          g: -900, drag: 0.5, size: rand(1.6, 3), life: rand(1.6, 2.6), trailT: 0, stuck: false,
+          g: -900, drag: 0.5, size: rand(1.6, 3), life: rand(1.2, 1.5), trailT: 0, stuck: false, bounces: 0,
+          delay: delay ? rand(delay * 0.5, delay) : 0,
         });
       }
     }
 
+    /** Spark cone around a WORLD direction (ricochet deflection, impact spall). */
+    cone(x, y, z, dir, spread = 0.45, { count = 8, color = '#e8f6ff', speed = 420, life = 0.22, size = 2 } = {}) {
+      const C = TD.Camera, n = C.norm(dir), { e1, e2 } = C.basis(n);
+      for (let i = 0; i < count; i++) {
+        const a = Math.random() * Math.PI * 2, r = Math.tan(spread) * Math.sqrt(Math.random());
+        const d = C.norm({ x: n.x + (e1.x * Math.cos(a) + e2.x * Math.sin(a)) * r, y: n.y + (e1.y * Math.cos(a) + e2.y * Math.sin(a)) * r, z: n.z + (e1.z * Math.cos(a) + e2.z * Math.sin(a)) * r });
+        const sp = speed * rand(0.55, 1.1);
+        this.spawn({ type: 'spark', x, y, z, vx: d.x * sp, vy: d.y * sp, vz: d.z * sp, g: -420, drag: 2.5, color: i % 3 ? color : '#ffffff', life: life * rand(0.6, 1.2), size: size * rand(0.7, 1.2) });
+      }
+    }
+
+    /** Elemental ammo trail micro-particles (called by tracers). */
+    ember(x, y, z) {
+      this.spawn({ type: 'ember', x: x + rand(-2, 2), y: y + rand(-2, 2), z, vx: rand(-25, 25), vy: rand(-25, 25), vz: rand(10, 45), drag: 1.5, size: rand(1.2, 2.2), life: rand(0.3, 0.6), color: pick(['#ffd060', '#ff8a2a', '#ff5a14']) });
+    }
+    mist(x, y, z) {
+      this.spawn({ type: 'smoke', x, y, z, vx: rand(-14, 14), vy: rand(-14, 14), vz: rand(-6, 10), size: rand(2.5, 4), grow: 2.6, color: '#dff8ff', alpha: 0.32, life: rand(0.35, 0.55), drag: 2 });
+      if (Math.random() < 0.35) this.spawn({ type: 'spark', x, y, z, vx: rand(-40, 40), vy: rand(-40, 40), vz: rand(-20, 30), drag: 3, color: '#f0ffff', life: 0.18, size: 1.2 });
+    }
+    drip(x, y, z) {
+      this.spawn({ type: 'drop', x, y, z, vx: rand(-20, 20), vy: rand(-20, 20), vz: rand(-30, 20), g: -700, size: rand(1.2, 2), life: 0.9, color: pick(['#b8ff3a', '#8aff20', '#dcff6a']) });
+    }
+
     /** Expanding shockwave with atmospheric refraction (screen-space distortion ring). */
-    shockwave(x, y, radius = 120, life = 0.45) {
-      this.spawn({ type: 'shock', layer: 'top', x, y, z: 0, size: radius, life });
+    shockwave(x, y, radius = 120, life = 0.45, strength = 0.07, delay = 0) {
+      TD.PostFX.shock(x, y, radius, life, strength, delay);
+    }
+
+    /** 📡 EMP: refractive double pulse + electric ground front (flat on the ISO plane, zero tilt). */
+    emp(x, y, R = 1000) {
+      const FX = TD.PostFX;
+      FX.shock(x, y, R, 0.9, 0.09);
+      FX.shock(x, y, R * 0.55, 0.6, 0.06, 0.12);
+      FX.flash(x, y, 60, 760, '#7fe8ff', 1.3, 0.7);
+      this.ring(x, y, { radius: R, color: '#8af4ff', width: 18, life: 0.9 });
+      this.ring(x, y, { radius: R * 0.6, color: '#ffffff', width: 9, life: 0.55 });
+      this.spawn({ type: 'empfront', layer: 'top', x, y, z: 0, size: R, life: 0.9 });
+      this.flash(x, y, 60, { size: 220, color: '170,240,255', life: 0.2 });
     }
 
     /** Lingering crater decal (15 s, slow fade). */
-    crater(x, y, radius = 50, life = 15) {
+    crater(x, y, radius = 50, life = rand(10, 15)) {
       let n = 0;
       for (let i = this.list.length - 1; i >= 0; i--) if (this.list[i].type === 'scorch' && ++n > 70) { this.list.splice(i, 1); break; }
       this.spawn({ type: 'scorch', layer: 'ground', x, y, size: radius, life, rot: rand(0, 6), crater: true, seed: Math.random() * 100 });
@@ -264,50 +336,69 @@
     /* ---------------- composite explosions ---------------- */
 
     /**
-     * Multi-layered high-explosive blast. scale ~ radius/80.
-     * L1 screen whiteout pop • L2 fireball (white core → yellow → orange → soot)
-     * L3 refraction shockwave • L4 molten shrapnel • L5 15 s crater decal.
+     * 4-phase cinematic high-explosive blast. scale ~ radius/80.
+     *  P1 0.00–0.08 s  pressure: white-hot flash + ground-hugging ISO distortion ring
+     *  P2 0.05–0.40 s  thermal fireball lobes  (white → yellow → orange → soot red)
+     *  P3 0.20–1.50 s  incandescent shrapnel parabolas (bounce + spark trails) + curling soot pillows
+     *  P4              locked scorch decal (alpha fades over 10–15 s, zero jitter)
      */
     explosion(x, y, z = 0, radius = 80, { smoke = true, scorch = true, debris = true, quiet = false } = {}) {
-      const s = radius / 80;
-      const g = this.game;
+      const s = radius / 80, sc = Math.min(2.2, s);
+      const g = this.game, FX = TD.PostFX;
       if (!quiet && g.blast) g.blast(radius);
-      this.flash(x, y, z + 10, { size: radius * 1.6, color: '255,250,235', life: 0.12 });
-      this.fire(x, y, z + 4, { count: Math.round(5 + 4 * s), size: 18 * Math.sqrt(s) + 8, speed: radius * 1.4, life: 0.38 + 0.08 * s, rise: 70 * s });
+      // ---- P1: pressure wave
+      this.flash(x, y, z + 10, { size: radius * 1.35, color: '255,255,250', life: 0.08 });
+      if (z < 40) this.ring(x, y, { radius: radius * 1.25, color: '#fff8e8', width: 2 + 2.5 * Math.sqrt(s), life: 0.16 });
+      if (radius >= 30) FX.shock(x, y, radius * 1.8, 0.34 + 0.06 * sc, 0.045 + 0.02 * sc, 0, Math.max(0, z * 0.3));
+      FX.flash(x, y, z + 25, radius * 2.8, '#ffb070', Math.min(0.9, 0.45 + 0.2 * sc), 0.3 + 0.12 * sc);
+      // ---- P2: thermal fireball
+      this.spawn({ type: 'tfire', x, y, z: z + radius * 0.18, size: radius * 0.62, life: 0.36, delay: 0.03, vz: 30 * s });
+      const lobes = Math.round(3 + 2.5 * sc);
+      for (let i = 0; i < lobes; i++) {
+        const a = Math.random() * Math.PI * 2, d = radius * rand(0.12, 0.42);
+        this.spawn({ type: 'tfire', x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, z: z + rand(4, radius * 0.3), size: radius * rand(0.3, 0.48),
+          life: rand(0.27, 0.35), delay: rand(0.04, 0.09), vx: Math.cos(a) * radius * 0.4, vy: Math.sin(a) * radius * 0.4, vz: rand(20, 70) * s, drag: 4 });
+      }
+      this.sparks(x, y, z + 10, { count: Math.round(6 + 4 * sc), color: '#ffe08a', speed: 240 + 110 * sc, life: 0.32 });
+      // ---- P3: shrapnel + volumetric soot
+      if (debris) this.shrapnel(x, y, z + 6, { count: Math.round(3 + 4 * sc), speed: 210 + 110 * sc, delay: 0.2 });
       if (smoke) {
-        // rolling, billowing black soot
-        this.smoke(x, y, z + 14, { count: Math.round(5 + 4 * s), size: 22 * Math.sqrt(s) + 10, speed: radius * 0.8, life: 1.5 + 0.4 * s, rise: 70 * s, color: '#24211e', alpha: 0.62, grow: 1.8, fadeIn: 0.28 });
-        this.smoke(x, y, z + 6, { count: Math.round(2 + 2 * s), size: 18 * Math.sqrt(s) + 8, speed: radius * 1.2, life: 1.1, rise: 25, color: '#6d655a', alpha: 0.45, fadeIn: 0.2 });
+        const n = Math.round(4 + 3.5 * sc);
+        for (let i = 0; i < n; i++) {
+          const a = Math.random() * Math.PI * 2, d = radius * rand(0, 0.35);
+          this.spawn({ type: 'soot', x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, z: z + radius * rand(0.1, 0.35),
+            vx: Math.cos(a) * radius * 0.25, vy: Math.sin(a) * radius * 0.25, vz: rand(40, 85) * Math.sqrt(s),
+            size: (12 * Math.sqrt(s) + 7) * rand(0.8, 1.2), grow: 1.5, color: pick(['#1c1a17', '#24211e', '#2c2824']), alpha: 0.88,
+            life: rand(1.05, 1.3), drag: 1.2, delay: rand(0.18, 0.28), fadeIn: 0.12, curl: rand(30, 60) * Math.sqrt(s), cph: rand(0, 6), cf: rand(2, 4) });
+        }
+        if (z < 30) this.smoke(x, y, 3, { count: Math.round(2 + 2 * sc), size: 12 * Math.sqrt(s) + 6, speed: radius * 1.5, life: 0.9, rise: 12, color: '#7a6a52', alpha: 0.4, fadeIn: 0.1 });
       }
-      // fireball(s)
-      this.spawn({ type: 'fireball', x, y, z: z + radius * 0.25, size: radius * 0.75, life: 0.5 + 0.12 * s, vz: 40 * s });
-      if (s > 0.8) for (let i = 0; i < Math.min(5, Math.round(s * 2)); i++) {
-        const a = Math.random() * Math.PI * 2, d = radius * rand(0.2, 0.5);
-        this.spawn({ type: 'fireball', x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, z: z + rand(5, radius * 0.4), size: radius * rand(0.35, 0.55), life: rand(0.4, 0.65), vz: rand(30, 90) });
-      }
-
-      this.sparks(x, y, z + 10, { count: Math.round(8 + 6 * s), color: '#ffd76a', speed: 260 + 120 * s, life: 0.4 });
-      if (debris) this.shrapnel(x, y, z + 6, { count: Math.round(3 + 4 * s), speed: 200 + 110 * s });
-      this.ring(x, y, { radius: radius * 1.1, color: '#ffe7b0', width: 5 * Math.sqrt(s) + 2, life: 0.3 });
-      if (radius >= 55) this.shockwave(x, y, radius * 1.7, 0.35 + 0.08 * s);
-      if (scorch && z < 30) this.crater(x, y, radius * 0.62, 15);
+      // ---- P4: static scorch decal
+      if (scorch && z < 30) this.crater(x, y, radius * 0.62);
     }
 
-    /** ☢ Nuclear detonation: mushroom cloud + layered shockwaves. */
+    /** ☢ Nuclear detonation: chromatic flash, double shockwave, fireball, rolling mushroom (60 % height). */
     nuke(x, y, radius) {
+      const FX = TD.PostFX;
       this.spawn({ type: 'mushroom', x, y, z: 0, size: radius, life: 6.5 });
-      this.flash(x, y, 40, { size: radius * 3.2, color: '255,255,235', life: 0.6 });
-      for (let i = 0; i < 4; i++) {
-        this.spawn({ type: 'ring', layer: 'ground', x, y, size: radius * (1.3 + i * 0.55), color: i % 2 ? '#ffb347' : '#fff6d0', width: 22 - i * 4, life: 0.7 + i * 0.25 });
+      this.flash(x, y, 40, { size: radius * 2.4, color: '255,255,240', life: 0.5 });
+      FX.flash(x, y, 80, 1300, '#fff0d0', 2.2, 1.6);
+      FX.flash(x, y, 60, 700, '#ff9a40', 1.2, 3.2, 0.4);
+      // double shockwave: primary pressure front + reflected ground wave
+      FX.shock(x, y, Math.min(760, radius * 2.4), 1.0, 0.12);
+      FX.shock(x, y, Math.min(1000, radius * 3.2), 1.3, 0.08, 0.35);
+      this.ring(x, y, { radius: radius * 1.6, color: '#fff6d0', width: 18, life: 0.7 });
+      this.spawn({ type: 'ring', layer: 'ground', x, y, size: radius * 2.4, color: '#ffb347', width: 12, life: 0.95, delay: 0.35 });
+      this.spawn({ type: 'tfire', x, y, z: 40, size: radius * 0.95, life: 0.9, vz: 90 });
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + rand(-0.3, 0.3), d = radius * rand(0.25, 0.55);
+        this.spawn({ type: 'tfire', x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, z: rand(10, 60), size: radius * rand(0.35, 0.5), life: rand(0.6, 0.85), delay: rand(0.03, 0.15), vz: rand(30, 90) });
       }
-      this.fire(x, y, 10, { count: 46, size: 60, speed: radius * 2.4, life: 0.9, rise: 120 });
-      this.smoke(x, y, 10, { count: 26, size: 46, speed: radius * 1.9, life: 2.6, rise: 30, color: '#6a5a48', alpha: 0.65, grow: 1.6 });
-      this.sparks(x, y, 30, { count: 90, color: '#fff2a0', speed: 900, life: 0.9 });
-      this.debris(x, y, 20, { count: 34, speed: 700, size: 7 });
-      this.shrapnel(x, y, 30, { count: 40, speed: 900 });
-      this.spawn({ type: 'fireball', x, y, z: 60, size: radius * 1.3, life: 1.1, vz: 120 });
-      this.shockwave(x, y, Math.min(330, radius * 1.4), 0.7);
-      this.crater(x, y, radius * 0.9, 18);
+      this.smoke(x, y, 10, { count: 18, size: 34, speed: radius * 1.9, life: 2.4, rise: 22, color: '#6a5a48', alpha: 0.6, grow: 1.6, fadeIn: 0.3 });
+      this.sparks(x, y, 30, { count: 60, color: '#fff2a0', speed: 800, life: 0.8 });
+      this.debris(x, y, 20, { count: 22, speed: 620, size: 6 });
+      this.shrapnel(x, y, 30, { count: 30, speed: 820, delay: 0.2 });
+      this.crater(x, y, radius * 0.9, 15);
       this.spawn({ type: 'fallout', layer: 'ground', x, y, size: radius * 0.8, life: 5.5 });
     }
 
@@ -316,58 +407,77 @@
       const L = this.list;
       for (let i = L.length - 1; i >= 0; i--) {
         const p = L[i];
+        if (p.delay > 0) { p.delay -= dt; continue; }
         p.life -= dt;
         if (p.life <= 0) { L.splice(i, 1); continue; }
         if (p.type === 'mushroom') { this.updateMushroom(p, dt); continue; }
         if (p.type === 'shrapnel') {
           if (p.stuck) continue;
           p.trailT -= dt;
-          if (p.trailT <= 0 && this.list.length < MAX_PARTICLES - 200) {
-            p.trailT = 0.07;
-            this.spawn({ type: 'smoke', x: p.x, y: p.y, z: p.z, size: 3, grow: 2.5, color: '#4a4540', alpha: 0.35, life: 0.45 });
+          if (p.trailT <= 0 && this.list.length < MAX_PARTICLES - 250) {
+            p.trailT = 0.04;
+            this.spawn({ type: 'spark', x: p.x, y: p.y, z: p.z, vx: p.vx * 0.05, vy: p.vy * 0.05, vz: p.vz * 0.05, color: '#ff9a3a', life: 0.14, size: 1.3 });
+            if (Math.random() < 0.3) this.spawn({ type: 'smoke', x: p.x, y: p.y, z: p.z, size: 2.5, grow: 2.5, color: '#4a4540', alpha: 0.3, life: 0.4 });
           }
-          if (p.z <= 0 && p.vz < 0) { p.z = 0; p.stuck = true; p.life = Math.min(p.life, 1.4); p.max = 1.4; continue; }
+          if (p.z <= 0 && p.vz < 0) {
+            if (p.bounces < 2 && p.vz < -120) {        // skip off the dirt, lose energy
+              p.bounces++; p.z = 0; p.vz *= -0.32; p.vx *= 0.55; p.vy *= 0.55;
+              if (this.list.length < MAX_PARTICLES - 250) this.spawn({ type: 'smoke', x: p.x, y: p.y, z: 1, size: 3, grow: 2, color: '#8a7a60', alpha: 0.35, life: 0.35 });
+            } else { p.z = 0; p.stuck = true; p.life = Math.min(p.life, 0.9); p.max = Math.max(p.life, 0.01); continue; }
+          }
         }
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         p.z += p.vz * dt;
         p.vz += p.g * dt;
+        if (p.curl) {                                // soot pillows curl as they rise
+          const age = p.max - p.life;
+          p.vx += Math.cos(p.cph + age * p.cf) * p.curl * dt;
+          p.vy += Math.sin(p.cph + age * p.cf) * p.curl * dt;
+        }
         if (p.drag) {
           const f = Math.max(0, 1 - p.drag * dt);
           p.vx *= f; p.vy *= f;
-          if (p.type === 'smoke' || p.type === 'fire') p.vz *= f;
+          if (p.type === 'smoke' || p.type === 'fire' || p.type === 'soot') p.vz *= f;
         }
+        if (p.type === 'drop' && p.z <= 0) { p.z = 0; p.g = 0; p.vx = p.vy = p.vz = 0; p.type = 'splat'; p.life = Math.min(p.life, 0.5); p.max = 0.5; continue; }
         if (p.g < 0 && p.z < 0) {
           p.z = 0;
           p.vz *= -0.35;
           p.vx *= 0.55; p.vy *= 0.55;
           p.vr *= 0.5;
+          if (p.type === 'casing') {               // brass: damped bounces, then lies still on the dirt
+            p.vt *= 0.45; p.bounces++;
+            if (p.vz < 45 || p.bounces > 3) { p.vz = 0; p.g = 0; p.rest = true; p.drag = 7; p.vr *= 0.3; p.vt = 0; }
+          }
         }
         p.rot += p.vr * dt;
+        if (p.vt) p.tumble += p.vt * dt;
+        if (p.rest) p.vr *= Math.max(0, 1 - dt * 6);
       }
     }
 
     updateMushroom(p, dt) {
       // emit rolling smoke into the stem & cap while the cloud forms
       const age = p.max - p.life;
-      if (age < 3.2 && Math.random() < 0.9) {
+      if (age < 3.2 && Math.random() < 0.5) {
         const gy = this.game.project(p.x, p.y, 0).y;
-        const capZ = Math.max(60, Math.min(Math.min(1, age / 1.6) * p.size * 0.85 + 40, gy - 150));
+        const capZ = mushroomCapZ(p.size, age, gy);
         const a = Math.random() * Math.PI * 2;
-        const r = p.size * (0.25 + Math.min(1, age / 1.2) * 0.35) * Math.sqrt(Math.random());
+        const r = p.size * NUKE_W * (0.25 + Math.min(1, age / 1.2) * 0.35) * Math.sqrt(Math.random());
         this.spawn({
-          type: 'smoke', x: p.x + Math.cos(a) * r, y: p.y + Math.sin(a) * r * 0.6, z: capZ + rand(-20, 20),
-          vx: Math.cos(a) * 30, vy: Math.sin(a) * 18, vz: rand(5, 25), size: rand(28, 46), grow: 0.8,
-          color: age < 0.9 ? '#ff9a4a' : pick(['#7a6a58', '#8d7b66', '#5e5246']), alpha: 0.75, life: rand(1.6, 2.6), drag: 1,
+          type: 'soot', x: p.x + Math.cos(a) * r, y: p.y + Math.sin(a) * r * 0.6, z: capZ + rand(-20, 20),
+          vx: Math.cos(a) * 30, vy: Math.sin(a) * 18, vz: rand(5, 25), size: rand(16, 26), grow: 0.8, fadeIn: 0.2,
+          color: pick(['#5a4a3c', '#4e4034', '#43372e']), lit: '#d6c2a4', litA: 0.55, hard: 0.55, nohot: true, alpha: 0.85, life: rand(1.6, 2.6), drag: 1,
         });
       }
     }
 
     draw(ctx, layer) {
-      const g = this.game;
-      this._refr = 0;
+      const g = this.game, FX = TD.PostFX, C = TD.Camera;
+      let glowBudget = 160;                      // emissive writes per layer per frame
       for (const p of this.list) {
-        if (p.layer !== layer) continue;
+        if (p.layer !== layer || p.delay > 0) continue;
         const t = p.life / p.max;   // 1 -> 0
         const s = g.project(p.x, p.y, p.z);
         switch (p.type) {
@@ -383,6 +493,70 @@
             ctx.globalAlpha = Math.min(1, t * 1.6);
             ctx.drawImage(D.blob(p.color), s.x - r, s.y - r, r * 2, r * 2);
             ctx.globalCompositeOperation = 'source-over';
+            if (glowBudget-- > 0) FX.glowDotS(s.x, s.y, r * 1.3, p.color, Math.min(1, t * 1.6) * 0.5);
+            break;
+          }
+          case 'ember': {
+            const fl = 0.6 + 0.4 * Math.sin((p.max - p.life) * 40 + p.x);
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.globalAlpha = Math.min(1, t * 2) * fl;
+            ctx.drawImage(D.blob(p.color), s.x - p.size * 2.5, s.y - p.size * 2.5, p.size * 5, p.size * 5);
+            ctx.fillStyle = '#fff2c0'; ctx.fillRect(s.x - p.size * 0.4, s.y - p.size * 0.4, p.size * 0.8, p.size * 0.8);
+            ctx.globalCompositeOperation = 'source-over';
+            break;
+          }
+          case 'drop': {
+            ctx.globalAlpha = Math.min(1, t * 3);
+            ctx.fillStyle = p.color;
+            ctx.beginPath(); ctx.ellipse(s.x, s.y, p.size * 0.7, p.size * 1.15, 0, 0, Math.PI * 2); ctx.fill();
+            break;
+          }
+          case 'splat': {
+            const gS = C.project(p.x, p.y, 0);
+            ctx.globalAlpha = t * 0.8; ctx.fillStyle = '#9cff2a';
+            ctx.beginPath(); ctx.ellipse(gS.sx, gS.sy, p.size * 2.2 * (1.4 - t * 0.4), p.size * 2.2 * C.ISO * (1.4 - t * 0.4), 0, 0, Math.PI * 2); ctx.fill();
+            break;
+          }
+          case 'soot': {                           // ⑶ volumetric soot pillow, curling up the Z axis
+            const age = p.max - p.life, r = p.size * (1 + (1 - t) * p.grow);
+            const a = Math.min(1, t * 2.2) * p.alpha * Math.min(1, age / p.fadeIn);
+            drawPuff(ctx, s.x, s.y, r, p.color, p.lit || '#6d645a', a, p.nohot ? 0 : Math.max(0, 1 - age / 0.45), p.hard || 0.45, p.litA || 0.5);
+            break;
+          }
+          case 'tfire': {                          // ⑵ thermal fireball lobe — temperature-graded
+            const k = 1 - t, e = 1 - Math.pow(1 - k, 3);
+            const r = p.size * (0.3 + 0.8 * e);
+            const f = Math.min(2.999, 3 * Math.pow(k, 0.6)), i = Math.floor(f), w = f - i;
+            const I = (1 - k * 0.35) * 0.8;
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.globalAlpha = (1 - w) * I; ctx.drawImage(tierSprite(i), s.x - r, s.y - r, r * 2, r * 2);
+            ctx.globalAlpha = w * I; ctx.drawImage(tierSprite(i + 1), s.x - r, s.y - r, r * 2, r * 2);
+            ctx.globalCompositeOperation = 'source-over';
+            if (k > 0.5) {                         // cooling skin turns to soot
+              ctx.globalAlpha = Math.min(0.7, (k - 0.5) * 1.6);
+              const rr = r * 1.04;
+              ctx.drawImage(D.blob('#1d1a17'), s.x - rr, s.y - rr * 1.02, rr * 2, rr * 2);
+            }
+            if (glowBudget-- > 0) FX.glowDotS(s.x, s.y, r * 1.3, TIER_GLOW[i], 0.55 * (1 - k));
+            if (p.size > 30 && k < 0.6) FX.light(p.x, p.y, p.z, p.size * 3, TIER_GLOW[Math.min(2, i)], 0.4 * (1 - k));
+            break;
+          }
+          case 'empfront': {                       // electric arcs crawling along the EMP ground front
+            const k = 1 - t, R = p.size * (1 - Math.pow(1 - k, 2.4));
+            if (R < 20) break;
+            const N = 44, pts = [];
+            ctx.globalCompositeOperation = 'lighter'; ctx.lineJoin = 'round';
+            for (let j = 0; j <= N; j++) {
+              const a = (j / N) * Math.PI * 2, rr = R + (j % N ? rand(-14, 14) : 0);
+              const q = C.project(p.x + Math.cos(a) * rr, p.y + Math.sin(a) * rr, j % N ? rand(0, 12) : 0);
+              pts.push({ x: q.sx, y: q.sy });
+            }
+            pts[N] = pts[0];
+            const path = () => { ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for (let j = 1; j <= N; j++) ctx.lineTo(pts[j].x, pts[j].y); ctx.stroke(); };
+            ctx.globalAlpha = t * 0.55; ctx.strokeStyle = '#5ae0ff'; ctx.lineWidth = 6; path();
+            ctx.globalAlpha = t; ctx.strokeStyle = '#e8fdff'; ctx.lineWidth = 1.6; path();
+            ctx.globalCompositeOperation = 'source-over';
+            FX.glowPath(pts, 10, '#5ae0ff', t);
             break;
           }
           case 'spark': {
@@ -396,12 +570,16 @@
           }
           case 'casing': {
             ctx.globalAlpha = Math.min(1, t * 3);
+            const gS = C.project(p.x, p.y, 0);
+            ctx.fillStyle = 'rgba(0,0,0,0.28)';
+            ctx.beginPath(); ctx.ellipse(gS.sx, gS.sy + 0.5, 3.6, 1.4, 0, 0, Math.PI * 2); ctx.fill();
+            const ct = Math.cos(p.tumble), len = 2.2 + 5 * Math.abs(ct);    // end-over-end tumble foreshortening
             ctx.save();
             ctx.translate(s.x, s.y); ctx.rotate(p.rot);
-            ctx.fillStyle = '#e8b54a';
-            ctx.fillRect(-3.5, -1.3, 7, 2.6);
-            ctx.fillStyle = '#8a5e1a';
-            ctx.fillRect(2.5, -1.3, 1.2, 2.6);
+            ctx.fillStyle = '#d9a43c'; ctx.fillRect(-len / 2, -1.3, len, 2.6);
+            ctx.fillStyle = '#f6d27a'; ctx.fillRect(-len / 2, -1.3, len, 0.9);
+            ctx.fillStyle = '#7a5216'; ctx.fillRect(len / 2 - 1.1, -1.3, 1.1, 2.6);
+            if (!p.rest && Math.abs(ct) > 0.92) { ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = '#fff3c8'; ctx.fillRect(-1, -1.3, 2, 1); ctx.globalCompositeOperation = 'source-over'; }
             ctx.restore();
             break;
           }
@@ -423,9 +601,7 @@
             ctx.globalAlpha = t;
             ctx.strokeStyle = p.color;
             ctx.lineWidth = p.width * t + 1;
-            ctx.beginPath();
-            ctx.ellipse(s.x, s.y, r, r * g.ISO, 0, 0, Math.PI * 2);
-            ctx.stroke();
+            ctx.beginPath(); C.groundEllipse(ctx, p.x, p.y, r, p.z); ctx.stroke();
             break;
           }
           case 'flash': {
@@ -438,6 +614,8 @@
             ctx.fillStyle = grd;
             ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.fill();
             ctx.globalCompositeOperation = 'source-over';
+            if (t > 0.5 || p.size > 50) FX.light(p.x, p.y, p.z, p.size * 2.4, `rgb(${p.color})`, Math.min(0.9, 0.45 * t * Math.min(1.6, p.size / 40)));
+            if (glowBudget-- > 0) FX.glowDotS(s.x, s.y, Math.min(r * 0.6, 60), `rgb(${p.color})`, 0.6 * t);
             break;
           }
           case 'bolt': {
@@ -452,6 +630,8 @@
             ctx.strokeStyle = p.color; ctx.lineWidth = 1.5;
             for (const br of p.branches) path(br.map((q) => g.project(q.x, q.y, q.z)));
             ctx.globalCompositeOperation = 'source-over';
+            FX.glowPath(pts, 9, '#7ff3ff', Math.min(1, t * 2.5));
+            { const e0 = p.points[p.points.length - 1]; FX.light(e0.x, e0.y, e0.z, 150, '#7fdcff', 0.7 * t); }
             break;
           }
           case 'line': {
@@ -464,6 +644,7 @@
             ctx.strokeStyle = p.color; ctx.lineWidth = p.width;
             ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
             ctx.globalCompositeOperation = 'source-over';
+            FX.glowLineS(a.x, a.y, b.x, b.y, p.width * 3, p.color, t);
             break;
           }
           case 'scorch': {
@@ -472,7 +653,7 @@
             ctx.translate(s.x, s.y); ctx.scale(1, g.ISO); ctx.rotate(p.rot);
             if (p.crater) {
               const age = p.max - p.life;
-              ctx.globalAlpha = Math.min(0.62, (p.life / p.max) * 1.6);
+              ctx.globalAlpha = 0.62 * Math.pow(p.life / p.max, 0.75);      // locked decal: alpha-only fade
               ctx.drawImage(D.blob('#0d0b08', 0.35), -r * 1.25, -r * 1.25, r * 2.5, r * 2.5);
               ctx.drawImage(craterSprite(), -r * 0.75, -r * 0.75, r * 1.5, r * 1.5);
               if (age < 3) { // glowing embers still cooling in the crater
@@ -480,6 +661,7 @@
                 ctx.globalAlpha = (1 - age / 3) * 0.55;
                 ctx.drawImage(D.blob('#ff5a1a'), -r * 0.55, -r * 0.55, r * 1.1, r * 1.1);
                 ctx.globalCompositeOperation = 'source-over';
+                if (age < 1.5) FX.light(p.x, p.y, 4, r * 2.2, '#ff6a20', 0.35 * (1 - age / 1.5));
               }
             } else {
               ctx.globalAlpha = Math.min(0.5, t * 0.9);
@@ -522,9 +704,10 @@
             ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y); ctx.stroke();
             ctx.strokeStyle = '#fff1b0'; ctx.lineWidth = p.size;
             ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo((s.x + e.x) / 2, (s.y + e.y) / 2); ctx.stroke();
+            if (glowBudget-- > 0) FX.glowLineS(s.x, s.y, e.x, e.y, p.size * 3, '#ff8a30', 0.8);
             break;
           }
-          case 'shock': this.drawShock(ctx, p, t, s); break;
+          case 'shock': break;            // (v10) refraction lives in TD.PostFX.distort
           case 'beam': {
             const a = g.project(p.a.x, p.a.y, p.a.z), b = g.project(p.b.x, p.b.y, p.b.z);
             const w = p.width * (0.4 + t * 0.6);
@@ -539,6 +722,9 @@
             ctx.globalAlpha = Math.min(1, t * 1.6);
             ctx.strokeStyle = p.core; ctx.lineWidth = Math.max(1.2, w * 0.7);
             ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+            FX.glowLineS(a.x, a.y, b.x, b.y, w * 4, `rgb(${p.glow})`, t);
+            FX.light(p.a.x, p.a.y, p.a.z, 180, `rgb(${p.glow})`, 0.8 * t);
+            FX.light(p.b.x, p.b.y, p.b.z, 160, `rgb(${p.glow})`, 0.9 * t);
             // helix ion trail
             ctx.strokeStyle = `rgba(${p.glow},${0.6 * t})`; ctx.lineWidth = 1.4;
             ctx.beginPath();
@@ -573,6 +759,7 @@
             ctx.globalCompositeOperation = 'lighter';
             ctx.drawImage(D.blob('#8dff4a'), -p.size, -p.size, p.size * 2, p.size * 2);
             ctx.restore();
+            FX.light(p.x, p.y, 10, p.size * 1.4, '#7dff40', 0.25 * Math.min(1, t * 2));
             ctx.globalCompositeOperation = 'source-over';
             break;
           }
@@ -592,86 +779,66 @@
       ctx.globalAlpha = 1;
     }
 
-    /** Shockwave ring that refracts (lenses) the already-rendered scene underneath it. */
-    drawShock(ctx, p, t, s) {
-      const g = this.game;
-      const k = 1 - t;
-      const R = p.size * (0.15 + 0.85 * (1 - (1 - k) * (1 - k)));
-      const band = Math.max(6, p.size * 0.14) * (0.5 + t * 0.5);
-      // Refraction: lens the pre-rendered terrain (static canvas → no GPU readback of the live frame)
-      if (TD.FX.refraction && this._refr < 4 && R > 20 && g.bg) {
-        this._refr++;
-        const BS = g.bgScale || 1.5;
-        ctx.save();
-        ctx.beginPath();
-        ctx.ellipse(s.x, s.y, R + band, (R + band) * g.ISO, 0, 0, Math.PI * 2);
-        ctx.ellipse(s.x, s.y, Math.max(1, R - band), Math.max(1, (R - band) * g.ISO), 0, 0, Math.PI * 2);
-        ctx.clip('evenodd');
-        const zoom = 1 + 0.08 * t;
-        const dw = (R + band) * 2, dh = (R + band) * 2 * g.ISO;
-        const sw = dw / zoom, sh = dh / zoom;
-        ctx.globalAlpha = 0.9;
-        try { ctx.drawImage(g.bg, (s.x - sw / 2) * BS, (s.y - sh / 2) * BS, sw * BS, sh * BS, s.x - dw / 2, s.y - dh / 2, dw, dh); } catch (e) { /* out of bounds */ }
-        ctx.globalAlpha = 0.12 * t;
-        ctx.fillStyle = '#fff6dc'; ctx.fillRect(s.x - dw / 2, s.y - dh / 2, dw, dh);
-        ctx.restore();
-      }
-      ctx.globalAlpha = 0.5 * t;
-      ctx.strokeStyle = '#fffdf0'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.ellipse(s.x, s.y, R + band * 0.6, (R + band * 0.6) * g.ISO, 0, 0, Math.PI * 2); ctx.stroke();
-      ctx.globalAlpha = 0.25 * t;
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.ellipse(s.x, s.y, Math.max(1, R - band * 0.6), Math.max(1, (R - band * 0.6) * g.ISO), 0, 0, Math.PI * 2); ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-
+    /** ☢ Mushroom cloud (v10, ≈60 % of the v6 height): base surge → dense stem → condensation skirt → rolling toroidal cap. */
     drawMushroom(ctx, p, t) {
-      const g = this.game;
+      const g = this.game, FX = TD.PostFX;
       const age = p.max - p.life;
       const R = p.size;
-      const grow = Math.min(1, age / 1.6);
+      const grow = Math.min(1, age / 1.6), eg = 1 - Math.pow(1 - grow, 2);
       const base = g.project(p.x, p.y, 0);
-      const capZ = Math.max(60, Math.min(grow * R * 0.85 + 40, base.y - 150));
+      const capZ = mushroomCapZ(R, age, base.y);
       const fade = Math.min(1, p.life / 2.2);
+      const hot = Math.max(0, 1 - age / 2.4);
       const top = g.project(p.x, p.y, capZ);
-      // stem
-      ctx.globalAlpha = 0.85 * fade;
-      const stemW = R * (0.18 + 0.06 * grow);
-      const sg = ctx.createLinearGradient(base.x - stemW, 0, base.x + stemW, 0);
-      sg.addColorStop(0, '#4d4036'); sg.addColorStop(0.45, age < 1.4 ? '#ffb15a' : '#8d7a64'); sg.addColorStop(1, '#3a3029');
-      ctx.fillStyle = sg;
-      ctx.beginPath();
-      ctx.moveTo(base.x - stemW * 1.8, base.y);
-      ctx.quadraticCurveTo(base.x - stemW * 0.6, (base.y + top.y) / 2, base.x - stemW * 0.9, top.y + 10);
-      ctx.lineTo(base.x + stemW * 0.9, top.y + 10);
-      ctx.quadraticCurveTo(base.x + stemW * 0.6, (base.y + top.y) / 2, base.x + stemW * 1.8, base.y);
-      ctx.closePath();
-      ctx.fill();
-      // skirt ring around the stem
-      ctx.globalAlpha = 0.5 * fade;
-      const ringZ = capZ * 0.45;
-      const rp = g.project(p.x, p.y, ringZ);
-      ctx.drawImage(D.blob('#a89580'), rp.x - R * 0.55, rp.y - R * 0.16, R * 1.1, R * 0.32);
-      // cap: rolling blobs
-      const capR = R * (0.3 + 0.42 * grow);
-      const blobs = 14;
-      for (let i = 0; i < blobs; i++) {
-        const a = (i / blobs) * Math.PI * 2 + age * 0.6;
-        const bx = top.x + Math.cos(a) * capR * 0.75;
-        const by = top.y + Math.sin(a) * capR * 0.28 - 6;
-        const br = capR * 0.42;
-        ctx.globalAlpha = fade;
-        ctx.drawImage(D.blob(age < 1.2 ? '#ff8a3a' : (i % 2 ? '#8d7b66' : '#6e604f'), 0.35), bx - br, by - br, br * 2, br * 2);
+      const capR = R * NUKE_W * (0.3 + 0.42 * eg);
+      const stemW = R * NUKE_W * (0.13 + 0.05 * eg);
+      const body = (k) => (k ? '#43372e' : '#54463a'), lit = '#e2cdae';
+      // ① base surge: rolling dust ring hugging the ground (ISO ellipse)
+      const surge = R * (0.55 + 0.9 * Math.min(1, age / 2.2));
+      const N0 = 16;
+      for (let i = 0; i < N0; i++) {
+        const a = (i / N0) * Math.PI * 2 + age * 0.25;
+        if (Math.sin(a) > 0) continue;                   // back half first
+        drawPuff(ctx, base.x + Math.cos(a) * surge, base.y + Math.sin(a) * surge * TD.Camera.ISO - 10, R * 0.16, '#6b5d4c', '#c4b294', 0.6 * fade, 0, 0.5, 0.45);
       }
-      ctx.globalAlpha = 0.95 * fade;
-      ctx.drawImage(D.blob(age < 1.5 ? '#ffc070' : '#9d8a74', 0.4), top.x - capR, top.y - capR * 0.7, capR * 2, capR * 1.2);
-      // inner fire glow
-      if (age < 2.6) {
+      // cloud shadow cast on the ground (sun from the top-left)
+      ctx.globalAlpha = 0.35 * fade * eg;
+      ctx.drawImage(D.blob('#000000'), base.x + capR * 0.1, base.y - capR * 0.12, capR * 1.8, capR * 0.75);
+      // ② stem: stacked puffs from the ground to the cap underside (hot core early)
+      const steps = 9;
+      for (let i = 0; i <= steps; i++) {
+        const k = i / steps, y = base.y + (top.y + capR * 0.15 - base.y) * k;
+        const w = stemW * (1.7 - 0.9 * Math.sin(k * Math.PI * 0.9)) * (0.9 + 0.1 * Math.sin(age * 3 + i));
+        drawPuff(ctx, base.x + Math.sin(age * 1.7 + i * 0.8) * stemW * 0.12, y, w, body(i % 2), lit, 0.95 * fade, hot * (1 - k * 0.5), 0.6, 0.35);
+      }
+      // ③ condensation skirt (Wilson ring) around the stem
+      const rp = g.project(p.x, p.y, capZ * 0.5);
+      ctx.globalAlpha = 0.45 * fade * Math.min(1, age / 0.8);
+      ctx.drawImage(D.blob('#d8d0c4', 0.3), rp.x - capR * 0.95, rp.y - capR * 0.14, capR * 1.9, capR * 0.28);
+      // ④ cap: toroidal roll — back ring, crown, front ring (rotating = rolling)
+      const ring = (front) => {
+        const N = 14;
+        for (let i = 0; i < N; i++) {
+          const a = (i / N) * Math.PI * 2 + age * 0.55;
+          const sn = Math.sin(a);
+          if ((sn > 0) !== front) continue;
+          const roll = Math.sin(age * 2.2 + i * 1.3) * capR * 0.06;
+          const bx = top.x + Math.cos(a) * capR * 0.78, by = top.y + sn * capR * 0.3 + roll;
+          drawPuff(ctx, bx, by, capR * (0.4 + 0.06 * sn), body(i % 2), lit, 0.97 * fade, hot * (front ? 0.5 : 0.9), 0.62, front ? 0.6 : 0.4);
+        }
+      };
+      ring(false);
+      drawPuff(ctx, top.x, top.y - capR * 0.22, capR * 0.72, '#5a4b3e', lit, 0.97 * fade, hot * 0.6, 0.62, 0.7);   // crown dome
+      ring(true);
+      // ⑤ incandescent core in the cap + stem foot (early seconds)
+      if (hot > 0) {
         ctx.globalCompositeOperation = 'lighter';
-        ctx.globalAlpha = (1 - age / 2.6) * 0.9;
-        ctx.drawImage(D.blob('#ff7a2a'), top.x - capR * 0.8, top.y - capR * 0.5, capR * 1.6, capR);
-        ctx.drawImage(D.blob('#ffd080'), base.x - stemW * 2, base.y - stemW * 2.5, stemW * 4, stemW * 3);
+        ctx.globalAlpha = hot * 0.85;
+        ctx.drawImage(D.blob('#ff7a2a'), top.x - capR * 0.7, top.y - capR * 0.25, capR * 1.4, capR * 0.6);
+        ctx.drawImage(D.blob('#ffd080'), base.x - stemW * 2, base.y - stemW * 2.2, stemW * 4, stemW * 2.6);
         ctx.globalCompositeOperation = 'source-over';
+        FX.glowDotS(top.x, top.y, capR * 1.1, '#ff8a3a', hot * 0.7, 0.55);
+        FX.light(p.x, p.y, capZ, R * 2.4, '#ff8a3a', 0.8 * hot);
       }
       ctx.globalAlpha = 1;
     }

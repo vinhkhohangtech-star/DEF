@@ -238,7 +238,13 @@
   /* =========================================================
      Game
      ========================================================= */
-  const W = 1600, H = 900;
+  /* Logical view. Landscape = 1600×900 (unchanged). 📱 v11 portrait: the battlefield is the top ~55 %
+     of a tall screen → the logical view becomes PORT_W wide and as tall as that area's aspect needs. */
+  const LAND_W = 1600, LAND_H = 900, LAND_CY = 470;
+  const PORT_W = 1300;            // ±650 world units visible across → Katyusha (range 610) stays on screen
+  const PORT_BF = 0.55;           // share of the screen height given to the battlefield
+  const PORTRAIT_MQ = window.matchMedia ? window.matchMedia('(orientation: portrait)') : null;
+  let W = LAND_W, H = LAND_H;
   /** Centre of the landing pad in assets/images/environment/Map.webp (1024×572). */
   const MAP_PAD = { x: 512, y: 276 };
 
@@ -248,8 +254,11 @@
       this.ctx = this.canvas.getContext('2d');
       this.W = W; this.H = H;
       this.ISO = 0.6;
-      this.CX = W / 2; this.CY = 470;
+      this.CX = W / 2; this.CY = LAND_CY;
+      this.portrait = false; this.textScale = 1;
       this.ARENA = { hw: 735, hh: 650 };
+      TD.Camera.attach(this);          // 📐 unified 2.5D projection
+      TD.PostFX.init();                // 💡 lights • bloom • refraction
       this.renderScale = 1;
       this.time = 0;
       this.speed = 1;
@@ -281,16 +290,47 @@
       requestAnimationFrame((t) => this.loop(t));
     }
 
-    project(x, y, z = 0) { return { x: this.CX + x, y: this.CY + y * this.ISO - z }; }
-    unproject(sx, sy) { return { x: sx - this.CX, y: (sy - this.CY) / this.ISO }; }
+    project(x, y, z = 0) { return TD.Camera.project(x, y, z); }
+    unproject(sx, sy) { return TD.Camera.unproject(sx, sy); }
 
     resize() {
-      const s = Math.min(window.innerWidth / W, window.innerHeight / H) * (this.touch || IS_TOUCH ? 1 : 0.98);
-      document.getElementById('game').style.setProperty('--s', s);
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const portrait = PORTRAIT_MQ ? PORTRAIT_MQ.matches : vh > vw;
+      const gameEl = document.getElementById('game');
+      let s;
+      if (portrait) {
+        // 📱 split screen: battlefield on top (--bf px), HP strip + docked shop below (CSS)
+        const bf = Math.round(vh * PORT_BF);
+        gameEl.style.setProperty('--bf', bf + 'px');
+        gameEl.style.setProperty('--s', 1);
+        this.setView(PORT_W, Math.max(LAND_H, Math.round(PORT_W * bf / Math.max(1, vw))), true);
+        s = vw / W;                                  // CSS px per logical unit
+      } else {
+        this.setView(LAND_W, LAND_H, false);
+        s = Math.min(vw / W, vh / H) * (this.touch || IS_TOUCH ? 1 : 0.98);
+        gameEl.style.setProperty('--s', s);
+      }
       const k = clamp(s * (window.devicePixelRatio || 1), 0.75, 2.2);
       this.renderScale = k;
       this.canvas.width = Math.round(W * k);
       this.canvas.height = Math.round(H * k);
+    }
+
+    /** v11: switch the logical view (landscape 1600×900 ↔ portrait PORT_W×h). Rebuilds the camera,
+        PostFX overlay and the pre-rendered background only when something actually changed. */
+    setView(w, h, portrait) {
+      document.body.classList.toggle('portrait', portrait);
+      if (w === W && h === H && portrait === this.portrait) return;
+      W = w; H = h; this.W = W; this.H = H;
+      const modeChanged = portrait !== this.portrait;
+      this.portrait = portrait;
+      this.CX = W / 2;
+      this.CY = portrait ? Math.round(H * 0.5) : LAND_CY;
+      this.textScale = portrait ? 1.6 : 1;           // floating numbers stay readable on a narrow phone
+      TD.Camera.attach(this);
+      TD.PostFX.setView(W, H);
+      if (this.bg) { this.bg = this.makeBackground(); this.bgScale = this.bg.width / W; this.vignette = this.makeVignette(); }
+      if (modeChanged && this.ui && this.ui.setPortrait) this.ui.setPortrait(portrait);
     }
 
     /* ---------------- environment ---------------- */
@@ -463,9 +503,22 @@
       if (map) {
         const iw = map.naturalWidth, ih = map.naturalHeight;
         const pc = iw === 1024 && ih === 572 ? MAP_PAD : { x: iw / 2, y: ih * 0.48 };
-        const s = Math.max(this.CX / pc.x, (W - this.CX) / (iw - pc.x), this.CY / pc.y, (H - this.CY) / (ih - pc.y)) * 1.03;
+        // scale is ALWAYS the landscape one (pad ↔ tower size stays identical in both orientations)
+        const s = Math.max((LAND_W / 2) / pc.x, (LAND_W / 2) / (iw - pc.x), LAND_CY / pc.y, (LAND_H - LAND_CY) / (ih - pc.y)) * 1.03;
         x.fillStyle = '#4a4436'; x.fillRect(0, 0, W, H);
-        x.drawImage(map, this.CX - pc.x * s, this.CY - pc.y * s, iw * s, ih * s);
+        const ox = this.CX - pc.x * s, oy = this.CY - pc.y * s, dw = iw * s, dh = ih * s;
+        // 📱 a taller view than the map → continue it with mirrored copies (seamless edges)
+        for (let j = -3; j <= 3; j++) for (let i = -2; i <= 2; i++) {
+          const x0 = ox + i * dw, y0 = oy + j * dh;
+          if (x0 > W || y0 > H || x0 + dw < 0 || y0 + dh < 0) continue;
+          const fx = i & 1, fy = j & 1;
+          x.save();
+          x.translate(x0 + (fx ? dw : 0), y0 + (fy ? dh : 0));
+          x.scale(fx ? -1 : 1, fy ? -1 : 1);
+          x.drawImage(map, 0, 0, dw, dh);
+          x.restore();
+          if (i || j) { x.fillStyle = 'rgba(20,24,12,0.22)'; x.fillRect(x0, y0, dw, dh); }   // far field a touch darker
+        }
         return c;
       }
       const grd = x.createLinearGradient(0, 0, 0, H);
@@ -601,6 +654,7 @@
       this.decoy = null;
       this.empFx = 0;
       this.whiteFlash = 0;
+      TD.PostFX.reset();
       this.gameOverT = 0;
       this.skills = TD.SKILLS.map((s) => ({ ...s, t: 0, maxT: s.cd * this.cdrMult }));
       this.ui.reset();
@@ -979,6 +1033,7 @@
       P.nuke(x, y, radius);
       this.fallout = { x, y, r: radius * 0.8, t: 5.5, dps: dmg * 0.04 };
       this.whiteFlash = 1;
+      TD.PostFX.chromaPulse(1);
       this.shake(26);
       this.audio.play('boom_l');
       this.ui.float(x, y, 220, '☢ NUKE!', 'big');
@@ -1141,8 +1196,7 @@
           for (const e of list) { e.stun(3.2 + 0.25 * TechLab.bonus('potency')); this.damageEnemy(e, 15 + this.wave * 2, { source: 'emp', style: 'shock' }); }
           for (const r of this.rockets) if (!r.dead) r.intercept();
           this.empFx = 1;
-          this.particles.ring(0, 0, { radius: 1000, color: '#8af4ff', width: 20, life: 0.8 });
-          this.particles.ring(0, 0, { radius: 600, color: '#ffffff', width: 10, life: 0.5 });
+          this.particles.emp(this.tower.x, this.tower.y, 1000);
           this.ui.banner('📡 XUNG EMP!', 'Địch tê liệt • tên lửa bị vô hiệu', '');
           this.audio.play('emp');
           ok = true; break;
@@ -1224,12 +1278,14 @@
       });
       this.canvas.addEventListener('mouseleave', () => { this.mouse.inside = false; });
       window.addEventListener('orientationchange', () => setTimeout(() => this.resize(), 250));
+      if (PORTRAIT_MQ && PORTRAIT_MQ.addEventListener) PORTRAIT_MQ.addEventListener('change', () => this.resize());
       document.addEventListener('visibilitychange', () => { if (document.hidden && this.state === 'playing') this.togglePause(true); });
     }
 
     /* ---------------- main loop ---------------- */
     loop(now) {
       const dt = Math.min(0.05, (now - this.last) / 1000);
+      TD.PostFX.governor(now - this.last);   // 🎛️ adaptive FX quality (keeps weak devices smooth)
       this.last = now;
       try {
         this.popFlashT = Math.max(0, this.popFlashT - dt);
@@ -1242,6 +1298,7 @@
         } else if (this.state === 'gameover' || this.state === 'menu') {
           this.time += dt;
           this.particles.update(dt);
+          TD.PostFX.update(dt);
           this.updateShake(dt);
           this.whiteFlash = Math.max(0, this.whiteFlash - dt * 1.2);
           if (this.state === 'gameover' && this.gameOverT > 0) {
@@ -1346,6 +1403,7 @@
       this.whiteFlash = Math.max(0, this.whiteFlash - dt * 1.2);
 
       this.particles.update(dt);
+      TD.PostFX.update(dt);
       this.updateShake(dt);
 
       if (this.pending.length && this.choiceDelay <= 0) this.choiceDelay = 0.35;
@@ -1367,6 +1425,9 @@
       ctx.fillStyle = '#2c3020';
       ctx.fillRect(-80, -80, W + 160, H + 160);
       ctx.drawImage(this.bg, 0, 0, W, H);
+      const FX = TD.PostFX;
+      FX.beginFrame(ctx);
+      FX.grade(ctx);
 
       const t = this.tower;
       this.particles.draw(ctx, 'ground');
@@ -1374,7 +1435,7 @@
       t.drawGroundExtras(ctx);
       if (this.decoy) this.drawDecoyGround(ctx);
       for (const c of this.charges) this.drawCharge(ctx, c);
-      if (this.ui.shopOpen && this.state === 'playing') this.drawRanges(ctx);
+      if (this.ui.shopOpen && !this.portrait && this.state === 'playing') this.drawRanges(ctx);
       if (this.state === 'playing') this.drawReticle(ctx);
 
       const list = [];
@@ -1391,6 +1452,7 @@
       list.sort((a, b) => a.y - b.y);
       for (const o of list) o.d();
       air.sort((a, b) => a.y - b.y);
+      FX.distort(ctx);                       // 🌊 shockwave refraction of the rendered battlefield
       for (const o of air) o.d();
 
       for (const p of this.projectiles) p.draw(ctx);
@@ -1398,8 +1460,10 @@
       if (t.branch) t.branch.drawTop(ctx);
       for (const f of this.flyovers) f.draw(ctx);
       this.particles.draw(ctx, 'top');
+      FX.composite();                        // 💡 dynamic lights + emissive bloom (overlay layer)
       this.ui.drawFloaters(ctx);
       ctx.restore();
+      FX.chromaticPass(ctx);
 
       if (this.empFx > 0) { ctx.fillStyle = `rgba(120,230,255,${this.empFx * 0.22})`; ctx.fillRect(0, 0, W, H); }
       ctx.drawImage(this.vignette, 0, 0, W, H);

@@ -13,7 +13,7 @@
   const angDiff = (a, b) => { let d = ((a - b + Math.PI) % (Math.PI * 2)) - Math.PI; if (d < -Math.PI) d += Math.PI * 2; return Math.abs(d); };
 
   /** Screen angle of a world direction (2.5D squash). */
-  function screenAngle(game, a) { return Math.atan2(Math.sin(a) * game.ISO, Math.cos(a)); }
+  function screenAngle(game, a) { return TD.Camera.screenAngle(a); }
 
   /* =========================================================
      MAIN MINIGUN
@@ -115,6 +115,7 @@
       // juice
       this.recoil = 1; this.flashT = 0.045;
       g.particles.flash(m.x, m.y, m.z, { size: 34, life: 0.05 });
+      TD.PostFX.flash(m.x, m.y, m.z, 150, '#ffc070', 0.75, 0.06);
       if (Math.random() < 0.7) { const b = this.breech(); g.particles.casing(b.x, b.y, b.z, this.aim); }
       if (Math.random() < 0.25) g.particles.spawn({ type: 'smoke', x: m.x, y: m.y, z: m.z, size: 6, grow: 2, color: '#c8c4bb', alpha: 0.35, life: 0.5, vz: 25 });
       g.audio.play('mg');
@@ -145,6 +146,7 @@
           ctx.closePath(); ctx.fill(); ctx.restore();
           ctx.drawImage(D.blob('#fff6c8'), fx - 7, fy - 7, 14, 14);
           ctx.globalCompositeOperation = 'source-over';
+          TD.PostFX.glowDotS(fx, fy, 22, '#ffcf70', 1);
         }
         return;
       }
@@ -632,6 +634,14 @@
       ctx.globalAlpha = 1;
       ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.6;
       ctx.beginPath(); ctx.moveTo(os.x, os.y); ctx.lineTo(end.x, end.y); ctx.stroke();
+      {
+        const FX = TD.PostFX, ew = { x: t.x + Math.cos(s.ang) * L, y: t.y + Math.sin(s.ang) * L, z: 6 };
+        FX.glowLineS(os.x, os.y, end.x, end.y, 16, '#ff40e0', 0.9 * fl);
+        FX.glowDotS(end.x, end.y, 40, '#ff6af0', 1, 0.65);
+        FX.light(ew.x, ew.y, 6, 170, '#ff40e0', 1.0 * fl);
+        FX.light(o.x, o.y, o.z, 120, '#ff40e0', 0.6);
+        for (let i = 1; i <= 3; i++) FX.light(t.x + Math.cos(s.ang) * L * i / 4, t.y + Math.sin(s.ang) * L * i / 4, 6, 110, '#ff40e0', 0.35);
+      }
       ctx.drawImage(D.blob('#ff6af0'), os.x - 18, os.y - 18, 36, 36);
       // impact point: plasma bloom + continuous crackling arcs
       ctx.drawImage(D.blob('#ff6af0'), end.x - 34, end.y - 22, 68, 44);
@@ -895,7 +905,8 @@
   /** 🛡️ Aegis Forcefield — spherical bubble eats ranged projectiles, auto-collapses on timeout. */
   class AegisShield extends SubAux {
     constructor(tower) { super(tower, 'aegis', { ox: -46, oy: 22 }); this.state = 'ready'; this.timer = 0; this.hp = 0; this.T = 0; this.ripples = []; this.anim = 0; this.sprites = {}; }
-    get R() { return this.tower.wall.lv > 0 ? 212 : 150; }
+    /** Dome radius: R ≈ 180 encloses the fortress from base to rooftop (212 when the perimeter wall is up). */
+    get R() { const t = this.tower; return Math.max(t.wall.lv > 0 ? 212 : 180, Math.round((t.height + 48) / 10) * 10); }
     get shieldMax() { return this.v('hp') * this.up; }
     get active() { return this.state === 'on'; }
     get ready() { return this.state === 'on' ? 1 : this.state === 'ready' ? 1 : 1 - clamp(this.timer / this.v('cd'), 0, 1); }
@@ -903,7 +914,7 @@
       const g = this.game;
       this.anim = this.active ? Math.min(1, this.anim + dt * 3.5) : Math.max(0, this.anim - dt * 3);
       for (const r of this.ripples) r.t += dt;
-      this.ripples = this.ripples.filter((r) => r.t < 0.55);
+      this.ripples = this.ripples.filter((r) => r.t < 0.8);
       if (this.state === 'cd') { this.timer -= dt; if (this.timer <= 0) this.state = 'ready'; return; }
       if (this.state === 'ready') { if (this.threat()) this.activate(); return; }
       this.T -= dt;
@@ -936,39 +947,77 @@
     absorb(x, y, z, dmg, attacker) {
       const g = this.game;
       this.hp -= dmg;
-      this.ripples.push({ x, y, z, t: 0 });
+      const t = this.tower, n = TD.Camera.norm({ x: x - t.x, y: y - t.y, z: Math.max(2, z) });
+      this.ripples.push({ x, y, z, n, t: 0 });
+      if (this.ripples.length > 10) this.ripples.shift();
+      TD.PostFX.flash(t.x + n.x * this.R, t.y + n.y * this.R, n.z * this.R, 120, '#7ff3ff', 0.9, 0.2);
       g.particles.sparks(x, y, z, { count: 6, color: '#bff6ff', speed: 200, life: 0.25 });
       g.audio.play('shield_hit');
       if (attacker && !attacker.dead && Math.random() < this.v('reflect')) {
         g.projectiles.push(new P.ReflectShot(g, { x, y, z, target: attacker, dmg: Math.max(30, dmg * 4) }));
       }
     }
+    /**
+     * Ray-traced hemisphere sprite (built once per radius). For every pixel the view ray of the
+     * ISO camera  (constant screen pos ⇔ direction (0, 1, ISO))  is intersected with the sphere:
+     * front + back shell, Fresnel rim  (1 − n·v)^2.4, hexagonal cells on the surface.
+     */
     domeSprite(R) {
       if (this.sprites[R]) return this.sprites[R];
-      const ISO = this.game.ISO, pad = 6;
-      const w = R * 2 + pad * 2, h = R + R * ISO + pad * 2;
+      const ISO = TD.Camera.ISO, pad = 4, top = Math.ceil(R * Math.sqrt(1 + ISO * ISO));   // silhouette apex sits above the pole
+      const w = Math.ceil(R * 2 + pad * 2), h = Math.ceil(top + R * ISO + pad * 2);
+      const cx = w / 2, cy = pad + top;             // ground centre of the dome inside the sprite
       const c = document.createElement('canvas'); c.width = w; c.height = h;
       const x = c.getContext('2d');
-      const cx = w / 2, cy = pad + R;
-      const path = () => { x.beginPath(); x.ellipse(cx, cy, R, R, 0, Math.PI, Math.PI * 2); x.ellipse(cx, cy, R, R * ISO, 0, 0, Math.PI); x.closePath(); };
-      const gr = x.createRadialGradient(cx, cy - R * 0.3, R * 0.1, cx, cy - R * 0.2, R * 1.05);
-      gr.addColorStop(0, 'rgba(90,220,255,0.03)'); gr.addColorStop(0.65, 'rgba(90,220,255,0.10)');
-      gr.addColorStop(0.9, 'rgba(120,235,255,0.32)'); gr.addColorStop(1, 'rgba(200,250,255,0.6)');
-      path(); x.fillStyle = gr; x.fill();
-      x.save(); path(); x.clip();
-      x.strokeStyle = 'rgba(160,245,255,0.22)'; x.lineWidth = 1;
-      const hs = 16;
-      for (let row = -2; row < (h / (hs * 1.5)) + 2; row++) {
-        for (let col = -2; col < w / (hs * 1.73) + 2; col++) {
-          const hx = col * hs * 1.73 + (row % 2 ? hs * 0.866 : 0), hy = row * hs * 1.5;
-          x.beginPath();
-          for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + (i * Math.PI) / 3; x.lineTo(hx + Math.cos(a) * hs, hy + Math.sin(a) * hs); }
-          x.closePath(); x.stroke();
+      const img = x.createImageData(w, h), d = img.data;
+      const A = 1 + ISO * ISO, vl = Math.sqrt(A), HEX = 15;
+      const hexEdge = (px, py) => {               // distance to nearest hex-cell edge (0 = on edge)
+        const q = (px * 0.57735 - py / 3) / HEX, r = (py * 2 / 3) / HEX;
+        let rx = Math.round(q), ry = Math.round(r), rz = Math.round(-q - r);
+        const dx = Math.abs(rx - q), dy = Math.abs(ry - r), dz = Math.abs(rz + q + r);
+        if (dx > dy && dx > dz) rx = -ry - rz; else if (dy > dz) ry = -rx - rz;
+        const fx = q - rx, fy = r - ry, fz = -fx - fy;
+        return 0.5 - Math.max(Math.abs(fx), Math.abs(fy), Math.abs(fz));
+      };
+      const shade = (t, u, v) => {                 // returns [alpha, hex] for the shell hit at ray param t
+        const X = u, Y = t, Z = ISO * t - v;
+        if (Z < 0) return null;
+        const ndv = Math.abs((Y + ISO * Z) / (R * vl));
+        const F = Math.pow(1 - ndv, 2.4);
+        const th = Math.atan2(Y, X), ph = Math.asin(Math.min(1, Z / R));
+        const e = hexEdge(th * R, ph * R);
+        const hex = e < 0.06 ? (1 - e / 0.06) : 0;
+        return [F, hex, Z];
+      };
+      for (let py = 0; py < h; py++) {
+        const v = py - cy;
+        for (let px = 0; px < w; px++) {
+          const u = px - cx;
+          const B = -2 * ISO * v, Cq = u * u + v * v - R * R;
+          const disc = B * B - 4 * A * Cq;
+          let a = 0, glow = 0;
+          if (disc >= 0) {
+            const sq = Math.sqrt(disc);
+            const fr = shade((-B + sq) / (2 * A), u, v);       // front shell (toward the viewer)
+            const bk = shade((-B - sq) / (2 * A), u, v);       // back shell seen through it
+            if (fr) { a += 0.035 + fr[0] * 0.62 + fr[1] * (0.14 + 0.3 * fr[0]); glow += fr[0]; }
+            if (bk) a += 0.02 + bk[0] * 0.22 + bk[1] * 0.07;
+            if (!fr && !bk) { const q = (u * u) / (R * R) + (v * v) / (R * R * ISO * ISO); if (q <= 1) a += 0.05 * q * q; }
+          } else {
+            const q = (u * u) / (R * R) + (v * v) / (R * R * ISO * ISO);
+            if (q <= 1) a += 0.05 * q * q;
+          }
+          if (a <= 0) continue;
+          const i = (py * w + px) * 4;
+          const k = Math.min(1, glow);
+          d[i] = 90 + 150 * k; d[i + 1] = 220 + 35 * k; d[i + 2] = 255; d[i + 3] = Math.min(255, a * 255);
         }
       }
-      x.restore();
-      path(); x.strokeStyle = 'rgba(200,250,255,0.75)'; x.lineWidth = 2; x.stroke();
-      return (this.sprites[R] = { c, cx, cy });
+      x.putImageData(img, 0, 0);
+      // crisp base ring where the dome meets the ground
+      x.strokeStyle = 'rgba(190,250,255,0.7)'; x.lineWidth = 1.6;
+      x.beginPath(); x.ellipse(cx, cy, R - 0.8, (R - 0.8) * ISO, 0, 0, Math.PI * 2); x.stroke();
+      return (this.sprites[R] = { c, cx, cy, w, h, top });
     }
     draw(ctx, sx, sy) {
       const on = this.active, k = this.ready;
@@ -993,39 +1042,69 @@
     }
     drawTop(ctx) {
       if (this.anim <= 0) return;
-      const g = this.game, t = this.tower;
+      const g = this.game, t = this.tower, C = TD.Camera, FX = TD.PostFX, ISO = C.ISO;
       const R = this.R;
       const spr = this.domeSprite(R);
-      const c = g.project(t.x, t.y, 0);
+      const c = C.project(t.x, t.y, 0);              // 📌 ground anchor — the dome never moves or scales
+      const bx = Math.round(c.sx), by = Math.round(c.sy);
       const hpK = this.active ? clamp(this.hp / this.shieldMax, 0, 1) : 0;
       const warn = this.active && this.T < 2 ? (Math.sin(g.time * 30) > 0 ? 0.45 : 1) : 1;
+      const pulse = 0.88 + 0.12 * Math.sin(g.time * 4.2);
       ctx.save();
+      // materialise from the ground up (clip), instead of scaling → base stays locked
+      ctx.beginPath(); ctx.rect(bx - spr.cx - 2, by + spr.h - spr.cy - (spr.h + 4) * this.anim, spr.w + 4, (spr.h + 4) * this.anim + 2); ctx.clip();
       ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = this.anim * (0.55 + 0.35 * hpK) * (0.88 + 0.12 * Math.sin(g.time * 5)) * warn;
-      const sc = 0.85 + 0.15 * this.anim;
-      ctx.translate(c.x, c.y); ctx.scale(sc, sc);
-      ctx.drawImage(spr.c, -spr.cx, -spr.cy);
-      ctx.restore();
-      // impact ripples
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, this.anim * 1.2) * (0.6 + 0.4 * hpK) * pulse * warn;
+      ctx.drawImage(spr.c, bx - spr.cx, by - spr.cy);
+      // two scan rings = exact latitude circles of the hemisphere, sweeping up
+      for (let j = 0; j < 2; j++) {
+        const zf = ((g.time * 0.35 + j * 0.5) % 1), z = R * zf * 0.96;
+        const rr = Math.sqrt(Math.max(0, R * R - z * z));
+        ctx.globalAlpha = 0.5 * Math.sin(zf * Math.PI) * this.anim * warn;
+        ctx.strokeStyle = '#bff8ff'; ctx.lineWidth = 1.3;
+        ctx.beginPath(); ctx.ellipse(bx, by - z, rr, rr * ISO, 0, 0, Math.PI); ctx.stroke();            // front half
+        ctx.globalAlpha *= 0.35;
+        ctx.beginPath(); ctx.ellipse(bx, by - z, rr, rr * ISO, 0, Math.PI, Math.PI * 2); ctx.stroke(); // back half
+      }
+      // kinetic impact ripples: geodesic circles travelling outward over the sphere surface
+      const V = C.VIEW;
       for (const r of this.ripples) {
-        const s = g.project(r.x, r.y, r.z);
-        const k = r.t / 0.55;
-        ctx.globalAlpha = 1 - k;
-        ctx.strokeStyle = '#e0fdff'; ctx.lineWidth = 3 * (1 - k) + 1;
-        ctx.beginPath();
-        for (let i = 0; i < 6; i++) { const a = (i * Math.PI) / 3; ctx.lineTo(s.x + Math.cos(a) * (8 + 34 * k), s.y + Math.sin(a) * (6 + 24 * k)); }
-        ctx.closePath(); ctx.stroke();
-        ctx.drawImage(D.blob('#7ff3ff'), s.x - 22, s.y - 18, 44, 36);
+        const k = r.t / 0.8, alpha = (1 - k) * (1 - k);
+        const ang = 0.04 + k * 1.25;                 // angular radius on the sphere
+        const { e1, e2 } = C.basis(r.n);
+        const ca = Math.cos(ang), sa = Math.sin(ang);
+        ctx.lineWidth = 2.6 * (1 - k) + 0.8;
+        let prev = null;
+        for (let i = 0; i <= 40; i++) {
+          const b = (i / 40) * Math.PI * 2, cb = Math.cos(b), sb = Math.sin(b);
+          const nx = r.n.x * ca + (e1.x * cb + e2.x * sb) * sa, ny = r.n.y * ca + (e1.y * cb + e2.y * sb) * sa, nz = r.n.z * ca + (e1.z * cb + e2.z * sb) * sa;
+          const ok = nz >= 0;
+          const p = C.project(t.x + nx * R, t.y + ny * R, nz * R);
+          const front = nx * V.x + ny * V.y + nz * V.z > 0;
+          if (ok && prev) {
+            ctx.globalAlpha = alpha * (front ? 1 : 0.3) * this.anim;
+            ctx.strokeStyle = front ? '#e8fdff' : '#7fdcff';
+            ctx.beginPath(); ctx.moveTo(prev.sx, prev.sy); ctx.lineTo(p.sx, p.sy); ctx.stroke();
+          }
+          prev = ok ? p : null;
+        }
+        const hp = C.project(t.x + r.n.x * R, t.y + r.n.y * R, r.n.z * R);
+        ctx.globalAlpha = alpha * this.anim;
+        ctx.drawImage(D.blob('#7ff3ff'), hp.sx - 20, hp.sy - 15, 40, 30);
+        FX.glowDotS(hp.sx, hp.sy, 26 * (1 - k) + 6, '#7ff3ff', alpha);
       }
       ctx.restore();
+      // rim bloom + faint interior light
+      if (this.anim > 0.05) {
+        FX.light(t.x, t.y, R * 0.5, R * 1.3, '#5ad8ff', 0.22 * this.anim * pulse);
+        FX.glowDotS(bx, by - R * 0.45, R * 1.05, '#2a90b0', 0.22 * this.anim * pulse, 1.1);
+      }
       // HP arc over the dome
       if (this.active) {
         ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 6;
-        ctx.beginPath(); ctx.arc(c.x, c.y, R * sc + 8, Math.PI * 1.25, Math.PI * 1.75); ctx.stroke();
+        ctx.beginPath(); ctx.arc(bx, by, spr.top + 8, Math.PI * 1.25, Math.PI * 1.75); ctx.stroke();
         ctx.strokeStyle = '#7ff3ff'; ctx.lineWidth = 3.5;
-        ctx.beginPath(); ctx.arc(c.x, c.y, R * sc + 8, Math.PI * 1.25, Math.PI * (1.25 + 0.5 * hpK)); ctx.stroke();
+        ctx.beginPath(); ctx.arc(bx, by, spr.top + 8, Math.PI * 1.25, Math.PI * (1.25 + 0.5 * hpK)); ctx.stroke();
       }
       ctx.globalAlpha = 1;
     }

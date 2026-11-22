@@ -27,6 +27,12 @@
 
   /** Draw a small missile body at screen point s, pointing along screen angle a. */
   function drawMissile(ctx, s, a, len, body, flame = true, t = 0, sid = null) {
+    if (flame) {
+      const ex = s.x - Math.cos(a) * len * 0.7, ey = s.y - Math.sin(a) * len * 0.7;
+      TD.PostFX.glowDotS(ex, ey, len * 0.9, '#ffa040', 0.8);
+      const w = TD.Camera.unproject(ex, ey);
+      TD.PostFX.light(w.x, w.y, 0, 90, '#ffa040', 0.35);
+    }
     if (sid && TD.S3 && TD.S3.has(sid)) {
       if (flame) {
         ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(a);
@@ -65,6 +71,54 @@
 
   /* ================= PLAYER ================= */
 
+  /* ---------- tracer streak sprites (cached): vapor trail + white-hot core, tail → head ---------- */
+  const STREAK = {
+    std:    { vapor: '255,184,84',  core: '255,251,232', w: 4.5, glow: '#ffb050', light: '#ffc070' },
+    incend: { vapor: '255,104,26',  core: '255,236,170', w: 5.2, glow: '#ff6a1a', light: '#ff7a2a' },
+    cryo:   { vapor: '120,232,255', core: '244,255,255', w: 5.0, glow: '#7fe8ff', light: '#8aeeff' },
+    acid:   { vapor: '160,255,48',  core: '242,255,206', w: 5.0, glow: '#9dff2a', light: '#a8ff40' },
+    he:     { vapor: '255,140,48',  core: '255,255,250', w: 6.0, glow: '#ff8a30', light: '#ffa050' },
+    rico:   { vapor: '170,220,255', core: '255,255,255', w: 4.0, glow: '#bfe4ff', light: '#cfeaff' },
+    enemy:  { vapor: '255,80,56',   core: '255,214,190', w: 4.0, glow: '#ff5038', light: '#ff6040' },
+  };
+  const _str = {};
+  function streakSprite(rgbStr, core) {
+    const key = rgbStr + (core ? 'c' : 'v');
+    if (_str[key]) return _str[key];
+    const c = document.createElement('canvas'); c.width = 96; c.height = 12;
+    const x = c.getContext('2d');
+    const h = x.createLinearGradient(0, 0, 96, 0);
+    if (core) { h.addColorStop(0, `rgba(${rgbStr},0)`); h.addColorStop(0.55, `rgba(${rgbStr},0.85)`); h.addColorStop(1, `rgba(255,255,255,1)`); }
+    else { h.addColorStop(0, `rgba(${rgbStr},0)`); h.addColorStop(0.35, `rgba(${rgbStr},0.25)`); h.addColorStop(0.85, `rgba(${rgbStr},0.85)`); h.addColorStop(1, `rgba(${rgbStr},1)`); }
+    x.fillStyle = h; x.fillRect(0, 0, 96, 12);
+    x.globalCompositeOperation = 'destination-in';
+    const v = x.createLinearGradient(0, 0, 0, 12);
+    v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(0.5, core ? 'rgba(0,0,0,1)' : 'rgba(0,0,0,0.95)'); v.addColorStop(1, 'rgba(0,0,0,0)');
+    x.fillStyle = v; x.fillRect(0, 0, 96, 12);
+    return (_str[key] = c);
+  }
+  /**
+   * Draw a hypersonic streak from WORLD point tail → head. The angle comes from TD.Camera.screenVector,
+   * so the streak lies exactly on the projected 3D flight line (no skew).
+   */
+  function drawStreak(ctx, tail, head, st, k = 1, light = false) {
+    const C = TD.Camera;
+    const sv = C.screenVector(tail, head);
+    if (sv.length < 0.5) return;
+    const h = C.project(head.x, head.y, head.z);
+    const L = sv.length, w = st.w * k;
+    ctx.save();
+    ctx.translate(h.sx, h.sy); ctx.rotate(sv.angle);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.drawImage(streakSprite(st.vapor, false), -L, -w / 2, L, w);              // tracer vapor (≤ 6 px)
+    ctx.drawImage(streakSprite(st.core, true), -L * 0.62, -0.9, L * 0.62 + 1, 1.8);  // white-hot core
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(-1.6, -1, 2.6, 2);                   // incandescent tip
+    ctx.restore();
+    const t = C.project(tail.x, tail.y, tail.z);
+    TD.PostFX.glowLineS(t.sx, t.sy, h.sx, h.sy, w * 2.4, st.glow, 0.75);
+    if (light) TD.PostFX.light(head.x, head.y, head.z, 70, st.light, 0.3);
+  }
+
   /** Minigun tracer round. */
   class Tracer extends Projectile {
     constructor(game, o) {
@@ -75,15 +129,39 @@
       this.traveled = 0;
       this.maxDist = (o.range || 420) * 1.15;
       this.vz = o.tz != null ? ((o.tz - o.z) / Math.max(0.05, (o.travel || 0.2))) : -60;
+      this.ox = o.x; this.oy = o.y; this.oz = o.z;      // muzzle / ricochet origin: streak never extends behind it
+      this.seq = (Tracer.n = (Tracer.n || 0) + 1);
+      this.fxT = 0;
+      if (o.homing) this.aimAt(o.homing);
+    }
+    /** Ricochet round: velocity locked on the straight 3D line to the target's centre of mass. */
+    comZ(e) { return (e.z || 0) + Math.min(28, e.height * 0.5); }
+    aimAt(e) {
+      const dx = e.x - this.x, dy = e.y - this.y, dz = this.comZ(e) - this.z;
+      const L = Math.hypot(dx, dy, dz) || 1;
+      this.vx = dx / L * this.speed; this.vy = dy / L * this.speed; this.vz = dz / L * this.speed;
+      return L;
+    }
+    style() {
+      if (this.bounced) return STREAK.rico;
+      if (this.explosive) return STREAK.he;
+      const am = this.ammo;
+      if (am) { if (am.incend) return STREAK.incend; if (am.cryo) return STREAK.cryo; if (am.acid) return STREAK.acid; }
+      return STREAK.std;
     }
     update(dt) {
       const g = this.game;
       const steps = Math.ceil((this.speed * dt) / 20);
       const sdt = dt / steps;
       for (let i = 0; i < steps && !this.dead; i++) {
+        const hm = this.homing;
+        if (hm) {
+          if (hm.dead) this.homing = null;
+          else if (this.aimAt(hm) < hm.radius + 6) { this.hitSet.add(hm); this.x = hm.x; this.y = hm.y; this.z = this.comZ(hm); this.onHit(hm); this.dead = true; break; }
+        }
         this.x += this.vx * sdt;
         this.y += this.vy * sdt;
-        this.z = Math.max(8, this.z + this.vz * sdt);
+        this.z = hm ? this.z + this.vz * sdt : Math.max(8, this.z + this.vz * sdt);
         this.traveled += this.speed * sdt;
         // interceptable enemy rockets
         for (const r of g.rockets) {
@@ -102,10 +180,19 @@
         }
       }
       if (this.traveled > this.maxDist) this.dead = true;
+      // elemental micro-particles along the flight path
+      const am = this.ammo;
+      if (am && !this.dead && (this.fxT -= dt) <= 0) {
+        this.fxT = 0.018;
+        const P = g.particles;
+        if (am.incend) P.ember(this.x, this.y, this.z);
+        else if (am.cryo) P.mist(this.x, this.y, this.z);
+        else if (am.acid && Math.random() < 0.6) P.drip(this.x, this.y, this.z);
+      }
     }
-    /** ⚡ Ricochet Lv3: bounce off the last target to an adjacent enemy. */
+    /** ⚡ Ricochet Lv3: deflection spark cone off Enemy 1, then a dead-straight round COM₁ → COM₂. */
     ricochet(from) {
-      const g = this.game;
+      const g = this.game, C = TD.Camera;
       if (!this.bounce || this.bounced) return;
       let best = null, bd = 230;
       for (const o of g.enemies) {
@@ -114,12 +201,19 @@
         if (d < bd) { bd = d; best = o; }
       }
       if (!best) return;
-      const z = (from.z || 0) + Math.min(28, from.height * 0.5);
-      g.particles.sparks(from.x, from.y, z, { count: 10, color: '#bfe9ff', speed: 360, life: 0.22 });
-      g.particles.flash(from.x, from.y, z, { size: 26, color: '200,240,255', life: 0.06 });
+      const z = this.comZ(from);
+      // impact point on the target's hull, its surface normal and the reflected spark cone
+      const din = C.norm({ x: this.vx, y: this.vy, z: this.vz });
+      const ip = { x: from.x - din.x * from.radius * 0.8, y: from.y - din.y * from.radius * 0.8, z: Math.max(4, z - din.z * from.radius * 0.8) };
+      let n = C.norm({ x: ip.x - from.x, y: ip.y - from.y, z: (ip.z - z) + 0.15 * from.radius });
+      let rf = C.reflect(din, n);
+      if (rf.x * n.x + rf.y * n.y + rf.z * n.z < 0.1) rf = n;
+      g.particles.cone(ip.x, ip.y, ip.z, rf, 0.5, { count: 10, color: '#cfeaff', speed: 440, life: 0.22 });
+      g.particles.flash(ip.x, ip.y, ip.z, { size: 26, color: '200,240,255', life: 0.06 });
+      TD.PostFX.flash(ip.x, ip.y, ip.z, 110, '#cfeaff', 0.8, 0.12);
       const tr = new Tracer(g, {
         x: from.x, y: from.y, z, angle: Math.atan2(best.y - from.y, best.x - from.x), dmg: this.dmg * 0.75, crit: this.crit,
-        range: bd + 40, tz: (best.z || 0) + Math.min(28, best.height * 0.5), travel: bd / 2600, ammo: this.ammo, bounced: true,
+        range: bd + 80, ammo: this.ammo, bounced: true, homing: best,
       });
       tr.hitSet.add(from);
       g.projectiles.push(tr);
@@ -142,22 +236,19 @@
       }
       const sp = Math.hypot(this.vx, this.vy) || 1;
       g.damageEnemy(e, dmg, { crit: this.crit, source: 'mg', dir: { x: this.vx / sp, y: this.vy / sp }, knock: { x: this.x - this.vx, y: this.y - this.vy, f: 26 } });
-      g.particles.sparks(e.x, e.y, Math.min(e.height * 0.5, 40) + e.z, { count: this.crit ? 9 : 4, color: this.crit ? '#ffe14d' : am && am.cryo ? '#bff4ff' : am && am.acid ? '#c8ff5a' : '#ffd890', speed: 220, life: 0.22 });
+      const hz = Math.min(e.height * 0.5, 40) + e.z;
+      g.particles.sparks(e.x, e.y, hz, { count: this.crit ? 9 : 4, color: this.crit ? '#ffe14d' : am && am.cryo ? '#bff4ff' : am && am.acid ? '#c8ff5a' : '#ffd890', speed: 220, life: 0.22 });
+      if (am && am.acid) for (let i = 0; i < 2; i++) g.particles.drip(e.x, e.y, hz);
+      if (this.seq % 2 === 0) TD.PostFX.flash(e.x, e.y, hz, 60, this.style().light, 0.45, 0.07);
       g.audio.play('hit');
     }
     draw(ctx) {
-      const g = this.game;
-      const head = g.project(this.x, this.y, this.z);
-      const tail = g.project(this.x - this.vx * 0.022, this.y - this.vy * 0.022, this.z - this.vz * 0.022);
-      ctx.lineCap = 'round';
-      ctx.globalCompositeOperation = 'lighter';
-      const am = this.ammo;
-      ctx.strokeStyle = this.explosive ? 'rgba(255,120,40,0.55)' : am && am.incend ? 'rgba(255,90,20,0.6)' : am && am.cryo ? 'rgba(120,220,255,0.6)' : am && am.acid ? 'rgba(170,255,60,0.55)' : 'rgba(255,190,80,0.45)';
-      ctx.lineWidth = this.bounced ? 4 : 6;
-      ctx.beginPath(); ctx.moveTo(tail.x, tail.y); ctx.lineTo(head.x, head.y); ctx.stroke();
-      ctx.strokeStyle = '#fff6d0'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(tail.x, tail.y); ctx.lineTo(head.x, head.y); ctx.stroke();
-      ctx.globalCompositeOperation = 'source-over';
+      // velocity-based motion blur: 16 ms exposure, clamped so it never reaches behind the muzzle / ricochet origin
+      const exp = 0.016, v = this.speed;
+      const back = Math.min(v * exp, Math.hypot(this.x - this.ox, this.y - this.oy, this.z - this.oz));
+      const k = back / v;
+      const tail = { x: this.x - this.vx * k, y: this.y - this.vy * k, z: this.z - this.vz * k };
+      drawStreak(ctx, tail, this, this.style(), 1, this.seq % 3 === 0);
     }
   }
 
@@ -213,8 +304,7 @@
     draw(ctx) {
       const g = this.game;
       const s = g.project(this.x, this.y, this.z);
-      const p = g.project(this.px, this.py, this.pz);
-      drawMissile(ctx, s, Math.atan2(s.y - p.y, s.x - p.x), 16, '#c8ccc4', true, this.t, 'rocket');
+      drawMissile(ctx, s, TD.Camera.screenVector({ x: this.px, y: this.py, z: this.pz }, this).angle, 16, '#c8ccc4', true, this.t, 'rocket');
     }
   }
 
@@ -266,8 +356,7 @@
     draw(ctx) {
       const g = this.game;
       const s = g.project(this.x, this.y, this.z);
-      const p = g.project(this.px, this.py, this.pz);
-      const a = Math.atan2(s.y - p.y, s.x - p.x);
+      const a = TD.Camera.screenVector({ x: this.px, y: this.py, z: this.pz }, this).angle;
       drawMissile(ctx, s, isFinite(a) ? a : -Math.PI / 2, 26, '#e9ecef', true, this.t, 'sam_missile');
     }
   }
@@ -409,14 +498,8 @@
       const g = this.game;
       const k = Math.min(1, this.t / this.T);
       const k0 = Math.max(0, k - 0.12);
-      const a = g.project(this.sx + (this.tx - this.sx) * k0, this.sy + (this.ty - this.sy) * k0, this.sz + (this.tz - this.sz) * k0);
-      const b = g.project(this.x, this.y, this.z);
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.strokeStyle = 'rgba(255,90,60,0.5)'; ctx.lineWidth = 4; ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-      ctx.strokeStyle = '#ffd0b0'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-      ctx.globalCompositeOperation = 'source-over';
+      const tail = { x: this.sx + (this.tx - this.sx) * k0, y: this.sy + (this.ty - this.sy) * k0, z: this.sz + (this.tz - this.sz) * k0 };
+      drawStreak(ctx, tail, this, STREAK.enemy, 1, false);
     }
   }
 
@@ -503,8 +586,7 @@
       const sh = g.project(this.x, this.y, 0);
       D.shadow(ctx, sh.x, sh.y, 8, 3, 0.25);
       const s = g.project(this.x, this.y, this.z);
-      const p = g.project(this.px, this.py, this.pz);
-      drawMissile(ctx, s, Math.atan2(s.y - p.y, s.x - p.x), 20, '#6f7a4c', true, this.t, 'rocket');
+      drawMissile(ctx, s, TD.Camera.screenVector({ x: this.px, y: this.py, z: this.pz }, this).angle, 20, '#6f7a4c', true, this.t, 'rocket');
       // red threat marker
       const pulse = 0.5 + 0.5 * Math.sin(this.t * 18);
       ctx.strokeStyle = `rgba(255,60,50,${0.4 + pulse * 0.5})`; ctx.lineWidth = 2;
@@ -565,7 +647,7 @@
       const sh = g.project(this.x, this.y, 0);
       D.shadow(ctx, sh.x, sh.y, 9, 4, 0.35);
       const s = g.project(this.x, this.y, this.z);
-      const a = Math.atan2(-this.vz, Math.hypot(this.vx, this.vy) * Math.sign(this.vx || 1));
+      const a = TD.Camera.screenAngleOfVelocity(this.vx, this.vy, this.vz);
       if (TD.S3 && TD.S3.has('bomb')) { TD.S3.drawRot(ctx, 'bomb', s.x, s.y, Math.PI / 2 - Math.min(1.2, Math.max(-1.2, a * 0.3)), 24); return; }
       ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(Math.PI / 2 - Math.min(1.2, Math.max(-1.2, a * 0.3)));
       ctx.fillStyle = '#2f342b'; D.roundRect(ctx, -11, -4.5, 22, 9, 4.5); ctx.fill();
@@ -597,7 +679,9 @@
     draw(ctx) {
       const g = this.game;
       const a = g.project(this.px, this.py, this.pz), b = g.project(this.x, this.y, this.z);
-      const ex = b.x + (b.x - a.x) * 2, ey = b.y + (b.y - a.y) * 2;
+      const sv = TD.Camera.screenVector({ x: this.px, y: this.py, z: this.pz }, this);
+      const ex = b.x + sv.dx * 2, ey = b.y + sv.dy * 2;
+      TD.PostFX.glowLineS(a.x, a.y, ex, ey, 12, '#5ae0ff', 0.9);
       ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
       ctx.strokeStyle = 'rgba(90,230,255,0.55)'; ctx.lineWidth = 7;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(ex, ey); ctx.stroke();
@@ -607,5 +691,5 @@
     }
   }
 
-  TD.Projectiles = { Projectile, Tracer, HomingRocket, SamMissile, Bomb, NukeWarhead, ArtyShell, EnemyBullet, TankShell, EnemyRocket, GasCanister, EnemyBomb, ReflectShot, drawMissile };
+  TD.Projectiles = { drawStreak, STREAK, Projectile, Tracer, HomingRocket, SamMissile, Bomb, NukeWarhead, ArtyShell, EnemyBullet, TankShell, EnemyRocket, GasCanister, EnemyBomb, ReflectShot, drawMissile };
 })(window.TD);

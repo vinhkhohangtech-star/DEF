@@ -20,7 +20,6 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div id="rotateHint"><div>📱↻</div><b>Xoay ngang điện thoại để chơi</b></div>
   <div id="stage">
     <div id="game">
       <canvas id="canvas"></canvas>
@@ -40,6 +39,7 @@
               <div id="hpLag"></div>
               <div id="hpFill"></div>
               <span id="hpText">600 / 600</span>
+              <span id="hpArmor"></span>
             </div>
             <div id="energy">
               <div class="ebar red" id="redBar"><div class="efill" id="redFill"></div><span id="redText">🔴 TIER 0 → 1</span></div>
@@ -178,6 +178,8 @@
   <!-- Load order matters: helpers first, main.js last (classic scripts → works from file:// with a double-click) -->
   <script src="src/Config.js"></script>
   <script src="src/AssetLoader.js"></script>
+  <script src="src/Camera.js"></script>
+  <script src="src/PostFX.js"></script>
   <script src="assets/sprites3d/manifest.js"></script>
   <script src="src/Sprites3D.js"></script>
   <script src="src/ParticleSystem.js"></script>

@@ -661,12 +661,200 @@ body.touch .icon-btn { transform: scale(1.35); margin-left: 10px; }
   pointer-events: none; white-space: nowrap; box-shadow: 0 0 30px rgba(255, 80, 64, .5);
 }
 #aimHint small { font-size: 19px; color: #ffb0a0; }
-#rotateHint { display: none; }
-@media (orientation: portrait) and (max-width: 900px) {
-  #rotateHint {
-    display: flex; position: fixed; inset: 0; z-index: 99; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
-    background: #14180f; color: #e8f0d0; font-family: var(--font, sans-serif); font-size: 22px; text-align: center; padding: 30px;
+#hpArmor { display: none; }
+
+/* =====================================================================
+   📱 v11 — NATIVE PORTRAIT (9:16 / 9:19.5): split screen
+   top  ~55 %  battlefield (canvas, --bf px set by Game.resize)
+   then 46 px  HP / armor / gold strip
+   bottom      docked 2-column upgrade console (#shop.docked)
+   Landscape / desktop keeps everything above untouched.
+   ===================================================================== */
+@media (orientation: portrait) {
+  body.portrait #game {
+    left: 0; top: 0; width: 100%; height: 100%;
+    transform: none; border-radius: 0; box-shadow: none;
+    --sat: env(safe-area-inset-top, 0px); --sab: env(safe-area-inset-bottom, 0px);
+    --strip: 46px;
+    background: #101416;
   }
-  #rotateHint div { font-size: 64px; animation: spinHint 2s ease-in-out infinite; }
-  @keyframes spinHint { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
+  body.portrait #canvas { width: 100%; height: var(--bf); }
+  body.portrait #fxLayer { width: 100% !important; height: var(--bf) !important; }
+  /* HP strip + console backdrop */
+  body.portrait #ui::before {
+    content: ''; position: absolute; left: 0; right: 0; top: var(--bf); height: var(--strip);
+    background: linear-gradient(#232b2e, #151b1d); border-top: 2px solid #0a0d0e; border-bottom: 2px solid #0a0d0e;
+    box-shadow: 0 -6px 14px rgba(0,0,0,.45);
+  }
+
+  /* ---------- top HUD ---------- */
+  body.portrait #hud { top: calc(var(--sat) + 6px); left: 6px; right: 6px; gap: 4px; align-items: center; }
+  body.portrait .hud-left { width: auto; gap: 4px; }
+  body.portrait .hud-right { width: auto; gap: 6px; }
+  body.portrait .pill { font-size: 13px; padding: 1px 8px; border-width: 2px; gap: 3px; box-shadow: 0 3px 0 rgba(0,0,0,.45), inset 0 0 0 1px #4d5c62; }
+  body.portrait .pill b, body.portrait .pill.small b { font-size: 15px; }
+  body.portrait .pill .ico img { width: 16px; height: 16px; }
+  body.portrait .icon-btn, body.touch.portrait .icon-btn {
+    transform: none; margin: 0; font-size: 16px; min-width: 42px; height: 36px; padding: 0 6px; border-width: 2px; border-radius: 10px;
+  }
+  body.portrait .hud-center { position: absolute; left: 0; right: 0; top: 42px; gap: 4px; }
+  body.portrait #energy { width: 100%; gap: 3px; margin: 0; }
+  body.portrait .ebar { height: 15px; }
+  body.portrait .ebar span { font-size: 10px; letter-spacing: .6px; }
+  body.portrait #jamWarn { font-size: 11px; padding: 1px 10px; }
+  body.portrait .boss-name { font-size: 13px; }
+  body.portrait #bossBar .bar { width: 80vw; height: 12px; }
+  body.portrait #combo { position: absolute; right: 0; top: 82px; padding: 1px 8px; }
+  body.portrait .pill.combo .mult { font-size: 14px; }
+
+  /* ---------- HP / armor / gold strip (children of #hud, which sits at --sat + 6px) ---------- */
+  body.portrait #hpBar {
+    position: absolute; left: 0; right: 106px; width: auto; height: 34px;
+    top: calc(var(--bf) - var(--sat) - 42px);        /* containing block = .hud-center (hud top + 42px) */
+    border-width: 2px; box-shadow: inset 0 0 0 1px #4d5c62;
+  }
+  body.portrait #hpText { font-size: 17px; }
+  body.portrait #hpArmor {
+    display: block; position: absolute; right: 10px; top: 0; bottom: 0; line-height: 30px;
+    font-size: 13px; font-weight: 700; color: #cfe7ff; text-shadow: 0 1px 2px #000;
+  }
+  body.portrait #goldPill {
+    position: absolute; right: 0; width: 100px; height: 34px; justify-content: center;
+    top: calc(var(--bf) - var(--sat));               /* containing block = #hud (top = sat + 6px) */
+  }
+  body.portrait #goldPill b { font-size: 17px; }
+
+  /* ---------- combat skills: floating on the bottom edge of the battlefield ---------- */
+  body.portrait #skills, body.touch.portrait #skills {
+    top: calc(var(--bf) - 74px); bottom: auto; gap: 10px;
+    transform: translateX(-50%);
+  }
+  body.portrait .skill { width: 64px; height: 64px; border-radius: 16px; border-width: 3px; }
+  body.portrait .skill .s-icon { font-size: 26px; line-height: 38px; }
+  body.portrait .skill .s-icon img { width: 34px; height: 34px; margin-top: 4px; }
+  body.portrait .skill .s-name { font-size: 9.5px; line-height: 1; position: absolute; left: 0; right: 0; bottom: 5px; text-align: center; }
+  body.portrait .skill kbd { display: none; }
+  body.portrait .skill .cd-text { font-size: 22px; }
+  body.portrait #aimHint {
+    bottom: auto; top: calc(var(--bf) - 150px); width: 92%; white-space: normal;
+    font-size: 14px; padding: 6px 10px; border-radius: 10px;
+  }
+  body.portrait #aimHint small { font-size: 12px; }
+  body.portrait #intermission {
+    top: 104px; font-size: 13px; padding: 5px 10px; gap: 8px; white-space: nowrap; border-radius: 10px;
+  }
+  body.portrait #intermission .btn.small { font-size: 13px; padding: 4px 10px; min-height: 36px; }
+  body.portrait #intermission kbd { display: none; }
+  body.portrait #banner { top: calc(var(--bf) * .3); }
+  body.portrait .b-title { font-size: 38px; -webkit-text-stroke: 1px #000; }
+  body.portrait .b-sub { font-size: 16px; }
+  body.portrait #bossWarning { top: calc(var(--bf) * .38); }
+  body.portrait #bossWarning .stripe { height: 14px; }
+  body.portrait .bw-text { font-size: 22px; }
+
+  /* ---------- docked upgrade console ---------- */
+  body.portrait #shop, body.portrait #shop.closed {
+    top: calc(var(--bf) + var(--strip)); left: 0; right: 0; bottom: 0; width: auto;
+    transform: none; transition: none; pointer-events: auto;
+  }
+  body.portrait #shopToggle { display: none; }
+  body.portrait #shopPanel {
+    border: none; border-radius: 0; box-shadow: none;
+    background: repeating-linear-gradient(-45deg, rgba(255,197,49,.03) 0 12px, transparent 12px 24px), linear-gradient(#1a2124, #0f1315);
+    padding: 6px 8px calc(var(--sab) + 10px);
+  }
+  .p-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  /* tile: [label · value · pips | 🪙 button] — 3 rows of 6 stats fit a 45 % panel without scrolling */
+  .p-stat {
+    background: linear-gradient(#2a3337, #1d2427); border: 2px solid #0a0d0e; border-radius: 10px;
+    padding: 6px 4px 6px 7px; min-width: 0;
+    display: grid; grid-template-columns: 1fr 66px; grid-template-rows: auto auto; column-gap: 5px; align-items: center;
+    box-shadow: inset 0 0 0 1px #3f4c52;
+  }
+  .p-top { display: flex; justify-content: space-between; align-items: baseline; gap: 3px; min-width: 0; }
+  .p-lbl { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .p-lvl { font-size: 10px; color: #9fb09a; font-weight: 700; white-space: nowrap; }
+  .p-mid { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .p-row { display: flex; justify-content: space-between; align-items: baseline; gap: 4px; }
+  .p-val { font-family: var(--stencil); font-weight: 400; font-size: 17px; color: #fff; line-height: 1.1; }
+  .p-mid .pips { width: 100%; gap: 1px; }
+  .p-mid .pips i { height: 5px; border-radius: 1px; }
+  .p-stat .buy { grid-column: 2; grid-row: 1 / span 2; align-self: stretch; min-height: 48px; width: 66px; padding: 0; font-size: 16px; border-radius: 9px; box-shadow: 0 3px 0 var(--ink); }
+  body.portrait .shop-title { display: none; }
+  .p-stat .buy:disabled { opacity: .55; filter: saturate(.3); }
+  .p-stat .buy.afford { animation: buyPulse 1.3s ease-in-out infinite; }
+  .p-stat .buy:active { transform: translateY(2px) scale(.98); }
+  @keyframes buyPulse {
+    0%, 100% { box-shadow: 0 3px 0 var(--ink), 0 0 0 rgba(140,255,90,0); }
+    50% { box-shadow: 0 3px 0 var(--ink), 0 0 12px rgba(140,255,90,.75); filter: brightness(1.12); }
+  }
+  .p-sec { font-family: var(--stencil); font-size: 13px; color: #ffd75a; margin: 8px 2px 4px; letter-spacing: .5px; }
+  .p-sec small { font-family: var(--font); color: #9fb09a; font-size: 12px; }
+  .p-tier { display: flex; align-items: center; gap: 6px; color: #dfe8d8; font-family: var(--font); font-weight: 700; }
+  .p-tier .w-icon { width: 28px; height: 28px; font-size: 14px; }
+
+  /* ---------- modals & overlays ---------- */
+  body.portrait .overlay {
+    justify-content: flex-start; justify-content: safe center;
+    overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+    padding: calc(var(--sat) + 14px) 12px calc(var(--sab) + 16px); gap: 10px;
+  }
+  body.portrait .modal-title { font-size: 26px; text-align: center; }
+  body.portrait .modal-sub { font-size: 14px; margin: 0; text-align: center; }
+  body.portrait .btn.big { font-size: 24px; padding: 10px 28px; min-height: 52px; }
+  body.portrait .btn.ghost, body.portrait .btn.cfg, body.portrait .btn.lab { font-size: 17px; padding: 8px 16px; min-height: 48px; }
+  /* start */
+  body.portrait .logo { font-size: 96px; letter-spacing: 6px; }
+  body.portrait .logo-sub { font-size: 18px; letter-spacing: 3px; }
+  body.portrait .tagline { font-size: 15px; text-align: center; }
+  body.portrait .start-btns { flex-direction: column; width: 100%; max-width: 320px; gap: 10px; }
+  body.portrait .start-btns .btn { width: 100%; }
+  body.portrait .controls { font-size: 12px; padding: 8px 10px; width: 100%; max-width: 360px; }
+  body.portrait .controls > div:nth-child(-n+2) { display: none; }   /* keyboard / mouse lines */
+  body.portrait .controls .hint { font-size: 12px; }
+  body.portrait .best { font-size: 17px; }
+  body.portrait .asset-status { position: static; font-size: 11px; text-align: center; }
+  /* card choice: large horizontal cards stacked vertically */
+  body.portrait #perkCards { flex-direction: column; gap: 10px; width: 100%; max-width: 420px; margin: 0; }
+  body.portrait .perk {
+    width: 100%; height: auto; min-height: 104px; padding: 10px 12px;
+    display: grid; grid-template-columns: 76px 1fr; column-gap: 12px; align-items: center; text-align: left;
+  }
+  body.portrait .perk:hover { transform: none; }
+  body.portrait .perk:active { transform: scale(.98); }
+  body.portrait .perk .p-icon { grid-row: 1 / span 4; width: 72px; height: 72px; font-size: 38px; margin: 0; }
+  body.portrait .perk .p-name { font-size: 18px; text-align: left; }
+  body.portrait .perk .p-lv { font-size: 12px; margin: 0; }
+  body.portrait .perk .p-desc { font-size: 13px; text-align: left; margin-top: 2px; }
+  body.portrait .perk .p-rarity { position: absolute; top: 6px; right: 8px; margin: 0; font-size: 10px; }
+  body.portrait .perk .p-tag { top: auto; bottom: 4px; right: 10px; left: auto; font-size: 9px; }
+  /* game over / pause */
+  body.portrait .go-title { font-size: 34px; text-align: center; }
+  body.portrait .go-stats { min-width: 0; width: 100%; max-width: 380px; padding: 8px 14px; }
+  body.portrait .go-stats .stat { font-size: 16px; }
+  body.portrait .go-tech { font-size: 16px; text-align: center; }
+  /* ⚙️ Skill Game + 🧬 Tech Lab: full-screen sheets */
+  body.portrait #cfgModal, body.portrait #labModal { padding: 0; justify-content: flex-start; overflow: hidden; }
+  body.portrait .cfg-box, body.portrait .lab-box {
+    width: 100%; height: 100%; max-height: none; border-radius: 0; border: none;
+    padding-top: var(--sat); padding-bottom: var(--sab);
+  }
+  body.portrait .cfg-head, body.portrait .lab-box .cfg-head { font-size: 20px; padding: 10px 12px 6px; white-space: normal; flex-wrap: wrap; }
+  body.portrait .cfg-head span { display: block; margin: 2px 0 0; font-size: 12px; }
+  body.portrait .lab-points { font-size: 16px; }
+  body.portrait #cfgTabs { overflow-x: auto; flex-wrap: nowrap; padding: 6px 8px 0; touch-action: pan-x; }
+  body.portrait #cfgTabs button { font-size: 13px; padding: 8px 12px; white-space: nowrap; flex: none; }
+  body.portrait #cfgBody, body.portrait #labBody { grid-template-columns: 1fr; padding: 8px; gap: 8px; max-height: none; flex: 1; overflow-y: auto; }
+  body.portrait .cfg-row { grid-template-columns: 1fr 1fr 70px; gap: 6px; }
+  body.portrait .cfg-row label { font-size: 13px; }
+  body.portrait .cfg-row input[type=number] { width: 70px; font-size: 15px; min-height: 36px; }
+  body.portrait .cfg-row .presets { grid-column: 1 / 4; flex-wrap: wrap; }
+  body.portrait .cfg-row .presets button { min-height: 34px; }
+  body.portrait .cfg-note { grid-column: 1 / 2; font-size: 12px; }
+  body.portrait .cfg-foot { flex-wrap: wrap; gap: 8px; padding: 8px 10px; justify-content: stretch; }
+  body.portrait .cfg-foot .btn { flex: 1; font-size: 14px; min-height: 48px; padding: 6px 8px; }
+  body.portrait #cfgToast, body.portrait .lab-hint { flex-basis: 100%; font-size: 12px; margin: 0; }
+  body.portrait .lab-row { grid-template-columns: 44px 1fr 80px; padding: 8px; }
+  body.portrait .lab-ico { width: 44px; height: 44px; font-size: 24px; }
+  body.portrait .lab-row .buy { width: 80px; min-height: 48px; font-size: 16px; }
 }

@@ -1,10 +1,10 @@
 /* DEF — service worker: cache everything so the installed app runs offline.
    Bump VERSION whenever game files change (or players keep the old cache). */
-const VERSION = 'def-v9';
+const VERSION = 'def-v11';
 const FILES = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
-  './src/Config.js', './src/AssetLoader.js', './src/Sprites3D.js', './src/ParticleSystem.js', './src/Projectile.js',
+  './src/Config.js', './src/AssetLoader.js', './src/Camera.js', './src/PostFX.js', './src/Sprites3D.js', './src/ParticleSystem.js', './src/Projectile.js',
   './src/Weapon.js', './src/Tower.js', './src/Enemy.js', './src/UI.js', './src/main.js',
   './assets/sprites3d/manifest.js', './assets/sprites3d/page0.png',
   './assets/images/environment/Map.webp',
