@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <!-- 📲 iPhone / Android: install as a full-screen app (Share → Add to Home Screen) -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="DEF" />
+  <meta name="theme-color" content="#14180f" />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png" />
+  <title>DEF — Pháo Đài Tác Chiến</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="rotateHint"><div>📱↻</div><b>Xoay ngang điện thoại để chơi</b></div>
+  <div id="stage">
+    <div id="game">
+      <canvas id="canvas"></canvas>
+
+      <div id="ui">
+        <!-- ================= HUD ================= -->
+        <div id="hud">
+          <div class="hud-left">
+            <div class="pill"><span class="ico" data-icon="wave">🚩</span> Wave <b id="waveNum">1</b></div>
+            <div class="pill gold" id="goldPill"><span class="ico" data-icon="gold">🪙</span> <b id="goldNum">0</b></div>
+            <div class="pill"><span class="ico">⭐</span> <b id="scoreNum">0</b></div>
+            <div class="pill small"><span class="ico">💀</span> <b id="killNum">0</b></div>
+          </div>
+
+          <div class="hud-center">
+            <div id="hpBar">
+              <div id="hpLag"></div>
+              <div id="hpFill"></div>
+              <span id="hpText">600 / 600</span>
+            </div>
+            <div id="energy">
+              <div class="ebar red" id="redBar"><div class="efill" id="redFill"></div><span id="redText">🔴 TIER 0 → 1</span></div>
+              <div class="ebar green" id="greenBar"><div class="efill" id="greenFill"></div><span id="greenText">🟢 THẺ PHỤ TRỢ</span></div>
+            </div>
+            <div id="jamWarn" class="hidden">📡 BỊ GÂY NHIỄU</div>
+            <div id="bossBar" class="hidden">
+              <div class="boss-name">☠️ <span id="bossName">BOSS</span></div>
+              <div class="bar"><div id="bossFill"></div></div>
+            </div>
+          </div>
+
+          <div class="hud-right">
+            <div id="combo" class="pill combo hidden">
+              <span>🔥 <b id="comboNum">0</b> chuỗi</span>
+              <span class="mult">×<b id="comboMult">1.0</b></span>
+              <div class="combo-timer"><div id="comboTimer"></div></div>
+            </div>
+            <button class="icon-btn" id="btnSpeed" title="Tốc độ">⏩ x1</button>
+            <button class="icon-btn" id="btnMute" title="Âm thanh (M)">🔊</button>
+            <button class="icon-btn" id="btnPause" title="Tạm dừng (P)">⏸</button>
+          </div>
+        </div>
+
+        <!-- ============ Intermission ============ -->
+        <div id="intermission" class="hidden">
+          <div>Wave <b id="nextWaveNum">2</b> tấn công sau <b id="nextWaveTime">5</b>s</div>
+          <button id="btnNextWave" class="btn small">⚔️ Xuất kích ngay <kbd>Space</kbd> <span class="bonus">+🪙</span></button>
+        </div>
+
+        <!-- ============ Skills bar ============ -->
+        <div id="skills"></div>
+        <div id="aimHint" class="hidden"></div>
+
+        <!-- ============ Upgrade drawer ============ -->
+        <div id="shop" class="closed">
+          <button id="shopToggle"><span>🛠️</span><span class="lbl">NÂNG CẤP</span><kbd>B</kbd></button>
+          <div id="shopPanel">
+            <div class="shop-title">🛠️ Xưởng Quân Giới <span class="shop-gold">🪙 <b id="shopGold">0</b></span></div>
+            <div id="shopContent"></div>
+          </div>
+        </div>
+
+        <!-- ============ Banners ============ -->
+        <div id="banner" class="hidden"><div class="b-title"></div><div class="b-sub"></div></div>
+        <div id="bossWarning" class="hidden">
+          <div class="stripe"></div>
+          <div class="bw-text">⚠️ SIÊU TĂNG ĐANG ĐẾN! ⚠️</div>
+          <div class="stripe"></div>
+        </div>
+
+        <!-- ============ Card / branch choice modal ============ -->
+        <div id="perkModal" class="overlay hidden">
+          <div class="modal-title" id="perkTitle">Chọn 1 Thẻ</div>
+          <div class="modal-sub" id="perkSub"></div>
+          <div id="perkCards"></div>
+        </div>
+
+        <!-- ============ Start screen ============ -->
+        <div id="startScreen" class="overlay">
+          <div class="logo">DEF</div>
+          <div class="logo-sub">PHÁO ĐÀI TÁC CHIẾN</div>
+          <p class="tagline">Bộ binh, xe tăng, drone và Katyusha đang áp sát. Giữ vững pháo đài càng lâu càng tốt!</p>
+          <div class="start-btns">
+            <button id="btnStart" class="btn big">▶ CHƠI NGAY</button>
+            <button id="btnCfg" class="btn cfg">⚙️ SKILL GAME</button>
+            <button id="btnLab" class="btn lab">🧬 TECH LAB</button>
+          </div>
+          <div class="controls">
+            <div><kbd>1</kbd> Pháo binh &nbsp; <kbd>2</kbd> Xung EMP &nbsp; <kbd>3</kbd> Sửa chữa &nbsp; <kbd>4</kbd> Mồi nhử hologram</div>
+            <div>Chuột: chọn toạ độ pháo kích &nbsp;•&nbsp; <kbd>B</kbd> Nâng cấp &nbsp;•&nbsp; <kbd>P</kbd> Tạm dừng &nbsp;•&nbsp; <kbd>M</kbd> Tắt tiếng</div>
+            <div class="hint">🔴 Thanh đỏ: tháp lên tầng & nhánh phòng thủ &nbsp;•&nbsp; 🟢 Thanh xanh: rút thẻ trang bị / đạn đặc biệt</div>
+            <div class="hint">🧬 Tech Lab: điểm công nghệ sau mỗi trận → nâng cấp vĩnh viễn</div>
+          </div>
+          <div id="bestLine" class="best"></div>
+          <div id="assetStatus" class="asset-status">Đang tải tài nguyên…</div>
+        </div>
+
+        <!-- ============ ⚙️ SKILL GAME (balance center) ============ -->
+        <div id="cfgModal" class="overlay hidden">
+          <div class="cfg-box">
+            <div class="cfg-head">⚙️ SKILL GAME <span>Trung tâm cân bằng & tinh chỉnh</span></div>
+            <div id="cfgTabs"></div>
+            <div id="cfgBody"></div>
+            <div class="cfg-foot">
+              <div id="cfgToast"></div>
+              <button id="cfgReset" class="btn ghost">↺ Reset to Default</button>
+              <button id="cfgSave" class="btn">💾 Save &amp; Apply</button>
+              <button id="cfgClose" class="btn ghost">✕ Close</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ============ 🧬 MILITARY TECH LAB ============ -->
+        <div id="labModal" class="overlay hidden">
+          <div class="cfg-box lab-box">
+            <div class="cfg-head">🧬 TECH LAB <span>Phòng thí nghiệm quân sự — nâng cấp vĩnh viễn</span>
+              <div class="lab-points">🧬 <b id="labPoints">0</b></div></div>
+            <div id="labBody"></div>
+            <div class="cfg-foot">
+              <div class="lab-hint">Nhận điểm sau mỗi trận: 2 điểm / wave + 1 điểm / 20 kill + 3 điểm / Siêu Tăng</div>
+              <button id="labRefund" class="btn ghost">↺ Hoàn điểm</button>
+              <button id="labClose" class="btn ghost">✕ Đóng</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ============ Pause ============ -->
+        <div id="pauseScreen" class="overlay hidden">
+          <div class="modal-title">⏸ Tạm Dừng</div>
+          <button id="btnResume" class="btn big">▶ Tiếp tục</button>
+          <button id="btnQuit" class="btn ghost">↺ Chơi lại từ đầu</button>
+        </div>
+
+        <!-- ============ Game over ============ -->
+        <div id="gameOver" class="overlay hidden">
+          <div class="go-title">PHÁO ĐÀI ĐÃ THẤT THỦ!</div>
+          <div class="go-stats">
+            <div class="stat"><span>🚩 Wave đạt được</span><b id="goWave">0</b></div>
+            <div class="stat"><span>💀 Địch bị hạ</span><b id="goKills">0</b></div>
+            <div class="stat"><span>🪙 Tiền kiếm được</span><b id="goGold">0</b></div>
+            <div class="stat"><span>🔥 Chuỗi cao nhất</span><b id="goCombo">0</b></div>
+            <div class="stat"><span>⭐ Điểm</span><b id="goScore">0</b></div>
+          </div>
+          <div id="goBest" class="best"></div>
+          <div id="goTech" class="go-tech"></div>
+          <div class="start-btns">
+            <button id="btnRetry" class="btn big">↻ Tái Chiến</button>
+            <button id="btnLabGo" class="btn lab">🧬 TECH LAB</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Load order matters: helpers first, main.js last (classic scripts → works from file:// with a double-click) -->
+  <script src="src/Config.js"></script>
+  <script src="src/AssetLoader.js"></script>
+  <script src="assets/sprites3d/manifest.js"></script>
+  <script src="src/Sprites3D.js"></script>
+  <script src="src/ParticleSystem.js"></script>
+  <script src="src/Projectile.js"></script>
+  <script src="src/Weapon.js"></script>
+  <script src="src/Tower.js"></script>
+  <script src="src/Enemy.js"></script>
+  <script src="src/UI.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>
