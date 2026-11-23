@@ -179,7 +179,11 @@
           }
         }
       }
-      if (this.traveled > this.maxDist) this.dead = true;
+      if (this.traveled > this.maxDist) {
+        this.dead = true;
+        // 🎯 v12 stray round: slaps into the dirt (spark flash + kicked-up soil), every other miss
+        if (!this.hitSet.size && !this.homing && this.seq % 2 === 0 && Math.abs(this.x) < g.ARENA.hw && Math.abs(this.y) < g.ARENA.hh) g.particles.dirtHit(this.x, this.y);
+      }
       // elemental micro-particles along the flight path
       const am = this.ammo;
       if (am && !this.dead && (this.fxT -= dt) <= 0) {

@@ -314,6 +314,16 @@
       if (dust) this.smoke(x, y, 4, { count: dust, size: 14, speed: speed * 0.3, life: 0.9, rise: 25, color: '#9c8a68', alpha: 0.5 });
     }
 
+    /** 🎯 v12: stray round slapping into the dirt — tiny spark flash + kicked-up dirt spray + dust. */
+    dirtHit(x, y, { strength = 1 } = {}) {
+      if (this.list.length > 1800) return;
+      this.spawn({ type: 'flash', x, y, z: 2, size: 14 * strength, color: '255,220,150', life: 0.05 });
+      for (let i = 0; i < 2; i++) this.spawn({ type: 'spark', x, y, z: 1, vx: rand(-90, 90), vy: rand(-60, 60), vz: rand(80, 170), g: -700, color: pick(['#ffe2a0', '#ffc060']), life: rand(0.1, 0.18), size: 1.2 });
+      for (let i = 0; i < 4; i++) this.spawn({ type: 'debris', x, y, z: 1, vx: rand(-40, 40), vy: rand(-30, 30), vz: rand(120, 230) * strength, g: -900, drag: 0.6, color: pick(['#6b5636', '#58462b', '#7d6640', '#8a7552']), size: rand(0.9, 1.8), rot: rand(0, 6), vr: rand(-12, 12), life: rand(0.35, 0.6) });
+      this.spawn({ type: 'smoke', x, y, z: 2, vx: rand(-8, 8), vy: rand(-6, 6), vz: rand(25, 45), size: rand(3, 4.5) * strength, grow: 2.4, color: pick(['#a8967a', '#9c8a68']), alpha: 0.45, life: rand(0.5, 0.8), drag: 1.5 });
+      TD.PostFX.flash(x, y, 4, 40 * strength, '#ffd890', 0.35, 0.06);
+    }
+
     /** Particles streaking inward to (x, y) — gravity vortex. */
     streaks(x, y, r, { count = 3, color = '#c48aff' } = {}) {
       for (let i = 0; i < count; i++) {
@@ -446,6 +456,11 @@
           p.vz *= -0.35;
           p.vx *= 0.55; p.vy *= 0.55;
           p.vr *= 0.5;
+          if (p.type === 'gear' && !p.rest) {      // 🪖 helmets / rifles / scrap: clank, bounce, settle
+            p.bounces++;
+            if (p.bounces === 1 && p.kind === 'scrap' && p.hot) this.spawn({ type: 'spark', x: p.x, y: p.y, z: 1, vx: rand(-60, 60), vy: rand(-40, 40), vz: rand(60, 120), g: -500, color: '#ffc870', life: 0.25, size: 1.3 });
+            if (p.vz < 40 || p.bounces > 3) { p.vz = 0; p.g = 0; p.rest = true; p.drag = 8; p.vr *= 0.2; p.layer = 'ground'; }
+          }
           if (p.type === 'casing') {               // brass: damped bounces, then lies still on the dirt
             p.vt *= 0.45; p.bounces++;
             if (p.vz < 45 || p.bounces > 3) { p.vz = 0; p.g = 0; p.rest = true; p.drag = 7; p.vr *= 0.3; p.vt = 0; }
@@ -513,8 +528,62 @@
           }
           case 'splat': {
             const gS = C.project(p.x, p.y, 0);
-            ctx.globalAlpha = t * 0.8; ctx.fillStyle = '#9cff2a';
+            ctx.globalAlpha = t * 0.8; ctx.fillStyle = p.splatColor || '#9cff2a';
             ctx.beginPath(); ctx.ellipse(gS.sx, gS.sy, p.size * 2.2 * (1.4 - t * 0.4), p.size * 2.2 * C.ISO * (1.4 - t * 0.4), 0, 0, Math.PI * 2); ctx.fill();
+            break;
+          }
+          case 'exhaust': {                        // 💨 v12 diesel puff: dark smoke ring that widens as it rises
+            const age = 1 - t, r = p.size * (1 + age * p.grow);
+            const a = Math.min(1, t * 1.6) * p.alpha * Math.min(1, age * 12 + 0.2);
+            drawPuff(ctx, s.x, s.y, r, p.color, '#8a847a', a * 0.85, 0, 0.4, 0.35);
+            ctx.globalAlpha = a * 0.5;
+            ctx.strokeStyle = '#6a655d'; ctx.lineWidth = Math.max(0.8, r * 0.22);
+            ctx.beginPath(); ctx.ellipse(s.x, s.y, r * 0.78, r * 0.48, 0, 0, Math.PI * 2); ctx.stroke();
+            break;
+          }
+          case 'stain': {                          // 🩸 v12 blood / oil pool spreading on the dirt (ground decal)
+            const age = p.max - p.life, gr = 0.35 + 0.65 * Math.min(1, age / 0.7), r = p.size * gr;
+            ctx.save();
+            ctx.translate(s.x, s.y); ctx.scale(1, g.ISO);
+            ctx.globalAlpha = p.alpha * Math.min(1, t * 3);
+            const b = D.blob(p.color, 0.65);
+            for (const [lx, ly, lr] of p.lobes) ctx.drawImage(b, lx * r - lr * r, ly * r - lr * r, lr * r * 2, lr * r * 2);
+            ctx.drawImage(b, -r * 0.7, -r * 0.7, r * 1.4, r * 1.4);
+            ctx.restore();
+            break;
+          }
+          case 'gear': {                           // 🪖 v12 death debris: helmet / rifle / blade / scrap / wheel
+            ctx.globalAlpha = Math.min(1, t * 4);
+            const gS = C.project(p.x, p.y, 0), sz = p.size;
+            ctx.fillStyle = 'rgba(0,0,0,0.25)';
+            ctx.beginPath(); ctx.ellipse(gS.sx, gS.sy + 0.5, Math.max(3, sz * (p.kind === 'rifle' ? 0.5 : 0.9)), 1.6, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.save();
+            ctx.translate(s.x, s.y); ctx.rotate(p.rot);
+            if (p.kind === 'helmet') {
+              ctx.fillStyle = p.color;
+              ctx.beginPath(); ctx.arc(0, 0, sz, Math.PI, 0); ctx.closePath(); ctx.fill();
+              ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(-sz - 1, -0.6, sz * 2 + 2, 1.6);
+              ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.beginPath(); ctx.arc(-sz * 0.3, -sz * 0.45, sz * 0.35, 0, Math.PI * 2); ctx.fill();
+            } else if (p.kind === 'rifle') {
+              ctx.fillStyle = '#1e1f1c'; ctx.fillRect(-sz / 2, -1.1, sz, 2.2);
+              ctx.fillStyle = '#5a3d22'; ctx.fillRect(-sz / 2 - 1, -1.6, sz * 0.3, 3.2);
+              if (p.mag) { ctx.fillStyle = '#2a2a26'; ctx.fillRect(sz * 0.05, 0.8, 2.2, 3.4); }
+              else { ctx.fillStyle = '#111'; ctx.fillRect(-sz * 0.05, -3, sz * 0.25, 1.8); }
+            } else if (p.kind === 'blade') {
+              ctx.fillStyle = '#c9ccd0'; ctx.fillRect(-1, -1, sz, 2);
+              ctx.fillStyle = '#2a1d12'; ctx.fillRect(-4, -1.4, 4, 2.8);
+            } else if (p.kind === 'wheel') {
+              ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(0, 0, sz, 0, Math.PI * 2); ctx.fill();
+              ctx.fillStyle = '#5a5a5a'; ctx.beginPath(); ctx.arc(0, 0, sz * 0.5, 0, Math.PI * 2); ctx.fill();
+            } else {
+              ctx.fillStyle = p.color;
+              ctx.beginPath();
+              ctx.moveTo(-sz, -sz * 0.3); ctx.lineTo(-sz * 0.1, -sz * 0.9); ctx.lineTo(sz, -sz * 0.2); ctx.lineTo(sz * 0.4, sz * 0.7); ctx.lineTo(-sz * 0.8, sz * 0.5);
+              ctx.closePath(); ctx.fill();
+              ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(-sz * 0.5, -sz * 0.5, sz * 0.9, 1);
+              if (p.hot && !p.rest) { ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = '#ff7a2a'; ctx.fillRect(-sz * 0.3, -sz * 0.2, sz * 0.6, sz * 0.4); ctx.globalCompositeOperation = 'source-over'; }
+            }
+            ctx.restore();
             break;
           }
           case 'soot': {                           // ⑶ volumetric soot pillow, curling up the Z axis

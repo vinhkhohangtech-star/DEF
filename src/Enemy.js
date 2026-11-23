@@ -115,7 +115,9 @@
       const m = TD.S3.M[id];
       const moving = !this.attacking && !this.frozen;
       const frame = m.frames > 1 && moving ? Math.floor(this.walkT * 0.85) % m.frames : 0;
-      TD.S3.draw(ctx, id, 0, 0, this.viewHeading(), frame);
+      // 1-frame infantry (AK, sniper, para): procedural leg scissor instead of a static glide
+      if (m.frames === 1 && TD.Loco && TD.Loco.kind(this) === 'inf') TD.Loco.drawGait(ctx, id, this.viewHeading(), this);
+      else TD.S3.draw(ctx, id, 0, 0, this.viewHeading(), frame);
       if (this.recoil > 0.7 && (this.type === 'tank' || this.type === 'boss')) {
         const a = this.turretA, L = this.type === 'boss' ? 80 : 48;
         this.muzzleFlash(ctx, Math.cos(a) * L, -(this.type === 'boss' ? 40 : 22) + Math.sin(a) * L * this.game.ISO, this.type === 'boss' ? 20 : 12);
@@ -183,6 +185,7 @@
     }
 
     update(dt) {
+      if (TD.Loco) TD.Loco.update(this, dt);           // 🏃 procedural gait / suspension (v12)
       if (!this.tickCommon(dt)) return;
       this.think(dt);
     }
@@ -473,6 +476,7 @@
     hitReact(knock) {
       this.squash = 1;
       this.hitFlash = 1;
+      if (TD.Loco) TD.Loco.flinch(this, knock || this.game.tower);
       if (knock && this.type !== 'boss') {
         const dx = this.x - knock.x, dy = this.y - knock.y;
         const d = Math.hypot(dx, dy) || 1;
@@ -490,11 +494,15 @@
       D.shadow(ctx, gs.x, gs.y, r * (this.air ? 0.8 : 1.15), r * (this.air ? 0.3 : 0.42), this.air ? 0.2 : 0.32);
       const s = g.project(this.x, this.y, this.z);
       const moving = !this.attacking && !this.frozen;
-      const bounce = moving && !this.heavy && !this.air && this.type !== 'biker' ? Math.abs(Math.sin(this.walkT)) * 2.5 : 0;
+      // 🏃 v12: stride bob / lean / sway (infantry), rumble / pitch / recoil (vehicles) from TD.Loco
+      const lk = TD.Loco && TD.Loco.on && TD.Loco.kind(this);
+      const pose = lk ? TD.Loco.pose(this) : null;
+      const bounce = pose ? pose.lift : moving && !this.heavy && !this.air && this.type !== 'biker' ? Math.abs(Math.sin(this.walkT)) * 2.5 : 0;
       const hs = this.squash * (this.heavy ? 0.3 : 1);
 
       ctx.save();
-      ctx.translate(s.x, s.y - bounce);
+      ctx.translate(s.x + (pose ? pose.dx : 0), s.y - bounce + (pose ? pose.dy : 0));
+      if (pose && (pose.rot || pose.sy !== 1)) { ctx.rotate(pose.rot); ctx.scale(1, pose.sy); }
       if (!this.air) ctx.scale(this.facing * (1 + hs * 0.12), 1 - hs * 0.1);
       const usedSprite = !this.air && TD.Assets.drawSprite(ctx, this.type, 0, 0, r * 2.8);
       if (!usedSprite) { if (this.s3) this.drawS3(ctx); else this.drawBody(ctx); }
@@ -1151,6 +1159,13 @@
     think(dt) {
       const g = this.game;
       this.glitch = Math.max(0, this.glitch - dt);
+      if (this.zapT > 0) {                                   // ⚡ v12: caught by the searchlight → arcs crawl over the suit
+        this.zapT -= dt;
+        if (Math.random() < dt * 16) {
+          const z0 = rand(4, 40);
+          g.particles.bolt([{ x: this.x + rand(-9, 9), y: this.y, z: z0 }, { x: this.x + rand(-11, 11), y: this.y + rand(-3, 3), z: z0 + rand(-14, 14) }], { life: 0.09, jag: 4 });
+        }
+      }
       if (this.cloaked && Math.hypot(this.x - g.tower.x, this.y - g.tower.y) < 235) this.reveal();   // proximity sensors
       if (!this.cloaked && this.revealT > 0) { this.revealT -= dt; this.halt(dt); return; }
       if (!this.cloaked) {
@@ -1223,6 +1238,24 @@
         return;
       }
       this.drawSuit(ctx);
+      if (this.zapT > 0) {                                   // electric shimmer silhouette
+        const k = Math.min(1, this.zapT / 0.4), t = this.game.time;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = 0.45 * k;
+        ctx.drawImage(D.blob('#7ff3ff'), -16, -52, 32, 56);
+        ctx.globalAlpha = 0.9 * k;
+        ctx.strokeStyle = '#bff8ff'; ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        for (let i = 0; i <= 16; i++) {
+          const u = i / 16, ang = -Math.PI / 2 + u * Math.PI * 2;
+          const rx = 10 + Math.sin(t * 60 + i * 2.1) * 2.2, ry = 23 + Math.sin(t * 47 + i * 1.3) * 2.2;
+          const px = Math.cos(ang) * rx, py = -22 + Math.sin(ang) * ry;
+          if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
     }
     drawSuit(ctx) {
       const step = !this.attacking ? Math.sin(this.walkT) : 0;

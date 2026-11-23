@@ -62,6 +62,8 @@
 
   /** Damage sources that bypass armor / reveal cloaked units. */
   const PIERCE = new Set(['nuke', 'arty', 'sam', 'fallout', 'rail', 'flame', 'burn', 'gas', 'barbed', 'vortex', 'reflect', 'impact']);
+  /** v12: kinetic hits → knock-back impulse (px/s, decays ×8/s → ≈ f/8 px of shove). */
+  const KINETIC = { mg: 26, rail: 40, uav: 18, reflect: 24 };
   const AOE = new Set(['mine', 'arty', 'bomb', 'nuke', 'fallout', 'he', 'rocket', 'sam', 'mortar', 'gas', 'vortex', 'flame', 'barbed', 'emp', 'tesla']);
 
   /* =========================================================
@@ -877,7 +879,13 @@
           e.dotAcc = 0; e.dotShown = this.time;
         }
       } else {
-        e.hitReact(opts.knock);
+        // 🎯 v12 kinetic rounds (minigun, railgun slug, drone MG) shove the target 2–5 px along the shot
+        let kn = opts.knock;
+        if (!kn && KINETIC[src] && !e.heavy) {
+          const o = opts.from || this.tower, d = opts.dir;
+          kn = d ? { x: e.x - d.x * 50, y: e.y - d.y * 50, f: KINETIC[src] } : { x: o.x, y: o.y, f: KINETIC[src] };
+        }
+        e.hitReact(kn);
         if (dmg >= 0.5) this.ui.float(e.x, e.y, (e.z || 0) + e.height + 10, String(Math.round(dmg)), style);
       }
       if (opts.crit && src === 'mg') { this.audio.play('crit'); this.shake(2.5); }
@@ -959,6 +967,28 @@
       if (a > 0) { this.popFlash = Math.max(this.popFlash, a); this.popFlashT = 0.05; }
       if ((radius >= 200 || this.blastAcc > 420) && this.hitStopCd <= 0) { this.hitStop = radius >= 200 ? 0.05 : 0.034; this.hitStopCd = 0.7; }
     }
+    /** 🚗🔥 v12: the burned-out car wrecks on the field keep smouldering — crackling embers,
+        licks of flame and a slow, oily smoke plume drifting downwind. */
+    burnWrecks(dt) {
+      const P = this.particles;
+      if (P.list.length > 1600) return;
+      for (const c of this.cover) {
+        if (c.v !== 1) continue;
+        const k = c.s || 1;
+        c.smT = (c.smT || rand(0, 0.3)) - dt;
+        if (c.smT <= 0) {
+          c.smT = rand(0.22, 0.34);
+          P.spawn({ type: 'soot', x: c.x + rand(-10, 10) * k, y: c.y + rand(-4, 4), z: 26 * k, vx: rand(6, 16), vy: rand(-4, 2), vz: rand(22, 34), size: rand(7, 10) * k, grow: 2.6, color: pick(['#1c1a17', '#24211e', '#2c2824']), lit: '#6a6158', litA: 0.45, hard: 0.5, nohot: true, alpha: 0.62, life: rand(3.6, 4.8), drag: 0.2, fadeIn: 0.5, curl: rand(8, 16), cph: rand(0, 6), cf: rand(0.8, 1.6) });
+        }
+        c.emT = (c.emT || 0) - dt;
+        if (c.emT <= 0) {
+          c.emT = rand(0.08, 0.2);
+          P.spawn({ type: 'ember', x: c.x + rand(-18, 18) * k, y: c.y + rand(-5, 5), z: rand(14, 26) * k, vx: rand(-14, 20), vy: rand(-6, 6), vz: rand(40, 90), g: 18, drag: 0.8, size: rand(0.7, 1.2), color: pick(['#ffb347', '#ff7a2a', '#ffd27a']), life: rand(0.9, 1.6) });
+          if (Math.random() < 0.45) P.spawn({ type: 'fire', x: c.x + rand(-14, 14) * k, y: c.y + rand(-3, 3), z: rand(12, 22) * k, vz: rand(25, 45), vx: rand(-6, 6), size: rand(4, 7) * k, grow: 0.5, color: pick(['#ffb347', '#ff6a1a', '#ff3a10']), life: rand(0.25, 0.45), drag: 1 });
+        }
+      }
+    }
+
     /** Burning husk sprite of a destroyed vehicle (lingers 10–15 s). */
     makeHusk(e) {
       if (this.husks.length > 16) this.husks.shift();
@@ -1045,6 +1075,7 @@
       this.kills++;
       if (e.type === 'boss') this.bossKills++;
       e.onDeath();
+      if (TD.Loco) TD.Loco.death(e);                     // 🪖 helmets, rifles, scrap + blood / oil stains (v12)
       if (e.cfg.husk) this.makeHusk(e);
       if (e.gasT > 0) { const gw = this.tower.aux$('gas'); if (gw) gw.burst(e.x, e.y); }
       this.combo++;
@@ -1389,6 +1420,7 @@
         }
       }
       this.husks = this.husks.filter((h) => h.t > 0);
+      this.burnWrecks(dt);
       this.blastAcc *= Math.max(0, 1 - dt * 7);
       if (this.combo > 0) { this.comboTimer -= dt; if (this.comboTimer <= 0) this.combo = 0; }
       for (const s of this.skills) if (s.t > 0) s.t = Math.max(0, s.t - dt);
@@ -1451,6 +1483,8 @@
       if (this.decoy) list.push({ y: this.decoy.y, d: () => this.drawDecoy(ctx) });
       list.sort((a, b) => a.y - b.y);
       for (const o of list) o.d();
+      for (const c of this.cover) if (c.v === 1) FX.light(c.x, c.y, 18, 110 * (c.s || 1), '#ff7a2a', 0.32 + 0.12 * Math.sin(this.time * 17 + c.x) * Math.sin(this.time * 7.3 + c.y));
+      t.drawSearchShaft(ctx);                // 🔦 volumetric searchlight cone (over units)
       air.sort((a, b) => a.y - b.y);
       FX.distort(ctx);                       // 🌊 shockwave refraction of the rendered battlefield
       for (const o of air) o.d();

@@ -447,7 +447,7 @@
           if (d > 460) continue;
           let da = Math.atan2(e.y - this.y, e.x - this.x) - this.searchA;
           da = Math.atan2(Math.sin(da), Math.cos(da));
-          if (Math.abs(da) < 0.17) e.reveal();
+          if (Math.abs(da) < 0.17) { e.reveal(); e.zapT = 1.4; }   // ⚡ caught in the beam → electric silhouette
         }
       }
       if (Math.abs(tierH(this.tier) - this.hDisp) > 3 && Math.random() < 0.5) {
@@ -464,10 +464,65 @@
       }
     }
 
+    /** Ground hot-spot of the sweeping searchlight (world). */
+    searchSpot() {
+      const a = this.searchA, d = 460 * 0.7;
+      return { x: this.x + Math.cos(a) * d, y: this.y + Math.sin(a) * d, r: 62 };
+    }
+    /** 🔦 v12 volumetric searchlight: a light shaft from the lamp on the command tower roof down to
+        the moving hot-spot, with drifting dust motes caught in the beam and a lens glare at the lamp. */
+    drawSearchShaft(ctx) {
+      if (this.tier < 2 || this.dead) return;
+      const g = this.game, C = TD.Camera;
+      const lz = this.hDisp + 30;
+      const lp = g.project(this.x, this.y, lz);
+      const sp = this.searchSpot(), ss = g.project(sp.x, sp.y, 0);
+      const v = C.screenVector({ x: this.x, y: this.y, z: lz }, { x: sp.x, y: sp.y, z: 0 });
+      const nx = -v.uy, ny = v.ux, R = sp.r * 1.05;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const gr = ctx.createLinearGradient(lp.x, lp.y, ss.x, ss.y);
+      gr.addColorStop(0, 'rgba(255,248,215,0.30)');
+      gr.addColorStop(0.35, 'rgba(255,246,210,0.13)');
+      gr.addColorStop(1, 'rgba(255,244,205,0.05)');
+      ctx.fillStyle = gr;
+      ctx.beginPath();
+      ctx.moveTo(lp.x + nx * 4, lp.y + ny * 4);
+      ctx.lineTo(ss.x + nx * R, ss.y + ny * R * 0.7);
+      ctx.lineTo(ss.x - nx * R, ss.y - ny * R * 0.7);
+      ctx.lineTo(lp.x - nx * 4, lp.y - ny * 4);
+      ctx.closePath(); ctx.fill();
+      // brighter core of the beam
+      ctx.fillStyle = 'rgba(255,252,230,0.07)';
+      ctx.beginPath();
+      ctx.moveTo(lp.x, lp.y);
+      ctx.lineTo(ss.x + nx * R * 0.4, ss.y + ny * R * 0.28);
+      ctx.lineTo(ss.x - nx * R * 0.4, ss.y - ny * R * 0.28);
+      ctx.closePath(); ctx.fill();
+      // dust motes drifting through the light (deterministic, no particles)
+      ctx.fillStyle = '#fff8dc';
+      for (let i = 0; i < 14; i++) {
+        const u = ((i * 0.618 + this.t * 0.05 * (1 + (i % 3) * 0.4)) % 1);
+        const w = Math.sin(i * 12.9898 + this.t * 0.7) * (0.15 + u * 0.85);
+        const px = lp.x + v.dx * u + nx * R * w * u, py = lp.y + v.dy * u + ny * R * 0.7 * w * u;
+        ctx.globalAlpha = 0.25 + 0.35 * Math.abs(Math.sin(this.t * 2 + i));
+        ctx.fillRect(px, py, 1.4, 1.4);
+      }
+      // lamp glare
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(D.blob('#fff6d0'), lp.x - 16, lp.y - 16, 32, 32);
+      ctx.globalAlpha = 0.35;
+      ctx.drawImage(D.blob('#fff6d0'), lp.x - 34, lp.y - 6, 68, 12);
+      ctx.restore();
+      TD.PostFX.glowDotS(lp.x, lp.y, 22, '#fff6d0', 0.8);
+      TD.PostFX.light(this.x, this.y, lz, 120, '#fff1c4', 0.35);
+    }
+
     drawGroundExtras(ctx) {
       const g = this.game;
       for (const w of this.auxWeapons) if (w.drawGround) w.drawGround(ctx);
       if (this.tier >= 2) {
+        // 🔦 ground pool of the searchlight: soft wedge (= the reveal zone) + bright elliptical hot-spot
         const a = this.searchA, L = 460, wd = 0.17;
         const o = g.project(this.x, this.y, 0);
         ctx.save();
@@ -476,12 +531,20 @@
         const p2 = g.project(this.x + Math.cos(a + wd) * L, this.y + Math.sin(a + wd) * L, 0);
         const pe = g.project(this.x + Math.cos(a) * L * 0.92, this.y + Math.sin(a) * L * 0.92, 0);
         const gr = ctx.createLinearGradient(o.x, o.y, pe.x, pe.y);
-        gr.addColorStop(0, 'rgba(255,250,210,0.0)'); gr.addColorStop(0.3, 'rgba(255,250,210,0.08)'); gr.addColorStop(1, 'rgba(255,250,210,0.16)');
+        gr.addColorStop(0, 'rgba(255,250,210,0.0)'); gr.addColorStop(0.3, 'rgba(255,250,210,0.06)'); gr.addColorStop(1, 'rgba(255,250,210,0.13)');
         ctx.fillStyle = gr;
         ctx.beginPath(); ctx.moveTo(o.x, o.y); ctx.lineTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.closePath(); ctx.fill();
-        ctx.globalAlpha = 0.22;
-        ctx.drawImage(D.blob('#fff6c8'), pe.x - 46, pe.y - 26, 92, 52);
+        const sp = this.searchSpot();
+        const ss = g.project(sp.x, sp.y, 0), sr = sp.r;
+        const flick = 0.92 + 0.08 * Math.sin(this.t * 31) * Math.sin(this.t * 13);
+        ctx.globalAlpha = 0.34 * flick;
+        ctx.save(); ctx.translate(ss.x, ss.y); ctx.rotate(TD.Camera.screenAngle(a)); ctx.scale(1, 0.62);
+        ctx.drawImage(D.blob('#fff6c8'), -sr * 1.25, -sr, sr * 2.5, sr * 2);
+        ctx.globalAlpha = 0.22 * flick;
+        ctx.drawImage(D.blob('#ffffff', 0.4), -sr * 0.6, -sr * 0.5, sr * 1.2, sr);
         ctx.restore();
+        ctx.restore();
+        TD.PostFX.light(sp.x, sp.y, 6, sr * 2.6, '#fff1c4', 0.55 * flick);
       }
       // nuke silo hatch beside the tower
       if (this.branchId === 'nuke' && TD.S3 && TD.S3.has('nuke_silo')) {
